@@ -1,0 +1,16 @@
+[package]
+name = "print3rs"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+serde = "1.0.195"
+tracing = "0.1.40"
+winnow = "0.5.33"
+tokio-serial = { version = "5.4.4" }
+tokio = { version = "1.35.1", features = ["rt", "io-util", "sync"] }
+bytes = "1.5.0"
+thiserror = "1.0.56"
+gcode-serializer = { path = "../gcode-serializer" }
