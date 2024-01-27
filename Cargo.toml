@@ -1,9 +1,5 @@
-[package]
-name = "print3rs"
-version = "0.1.0"
-edition = "2021"
-
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [workspace]
-members = ["print3rs-core", "gcode-serializer"]
+members = ["print3rs-core", "gcode-serializer", "parser-parser"]
+resolver = "2"
