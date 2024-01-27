@@ -1,5 +1,5 @@
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [workspace]
-members = ["print3rs-core", "gcode-serializer", "parser-parser"]
+members = ["print3rs-core", "gcode-serializer", "print3rs-console"]
 resolver = "2"
