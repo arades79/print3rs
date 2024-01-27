@@ -1,13 +1,12 @@
 use winnow::{
-    ascii::{alpha1, alphanumeric1, float},
+    ascii::{alphanumeric1, float},
     combinator::{alt, preceded, repeat, terminated},
-    error::ContextError,
     prelude::*,
-    token::{take_till, take_until},
+    token::take_till,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-enum Segment<'a> {
+pub enum Segment<'a> {
     Tag(&'a str),
     Value(&'a str),
 }
@@ -26,11 +25,11 @@ fn parse_segment<'a>(input: &mut &'a str) -> PResult<Segment<'a>> {
     alt((parse_tag, parse_value)).parse_next(input)
 }
 
-fn parse_segments<'a>(input: &mut &'a str) -> PResult<Vec<Segment<'a>>> {
+pub fn parse_segments<'a>(input: &mut &'a str) -> PResult<Vec<Segment<'a>>> {
     repeat(0.., parse_segment).parse_next(input)
 }
 
-fn make_parser<'a, 'b>(
+pub fn make_parser<'a, 'b>(
     segments: &'b [Segment<'a>],
 ) -> impl FnMut(&mut &'b str) -> PResult<Vec<f32>> {
     move |input: &mut &'b str| -> PResult<Vec<f32>> {
@@ -49,7 +48,7 @@ fn make_parser<'a, 'b>(
     }
 }
 
-fn get_headers(segments: &[Segment]) -> String {
+pub fn get_headers(segments: &[Segment]) -> String {
     let mut s = String::new();
     for segment in segments {
         if let Segment::Value(label) = segment {
@@ -91,6 +90,6 @@ mod tests {
         let segments = parse_segments.parse(parse_pattern).unwrap();
         let mut parser = make_parser(&segments);
         let final_out = parser.parse("millis: 1234.5,pos:-4.0,current:100").unwrap();
-        assert_eq!(final_out, vec![1234.5,-4.0,100.0]);
+        assert_eq!(final_out, vec![1234.5, -4.0, 100.0]);
     }
 }
