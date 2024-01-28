@@ -6,4 +6,10 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+eyre = "0.6.11"
+rustyline-async = "0.4.1"
+tokio = { version = "1.35.1", features = ["rt", "macros", "io-util"] }
 winnow = "0.5.35"
+print3rs-core ={ path = "../print3rs-core"}
+tracing = "0.1.40"
+futures-util = "0.3.30"
