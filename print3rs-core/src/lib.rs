@@ -62,10 +62,10 @@ async fn printer_com_task(
                 tracing::info!("Sent `{}` to printer", String::from_utf8_lossy(&line));
             },
             Ok(_) = serial.read(&mut buf) => {
+                tracing::debug!("Received `{}` from printer", String::from_utf8_lossy(&buf));
                 let newline = buf.iter().position(|b| *b == b'\n');
                 if let Some(n) = newline {
                     let line = buf.split_to(n + 1).freeze();
-                    tracing::debug!("Received `{}` from printer", String::from_utf8_lossy(&line));
                     let _ = responsetx.send(line); // ignore errors and keep trying
                 }
             }
