@@ -13,5 +13,5 @@ winnow = "0.5.35"
 print3rs-core ={ path = "../print3rs-core"}
 tracing = "0.1.40"
 futures-util = "0.3.30"
-tokio-serial = "5.4.4"
+tokio-serial = {version = "5.4.4", features = ["libudev"]}
 tracing-subscriber = "0.3.18"
