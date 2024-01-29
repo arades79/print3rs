@@ -14,3 +14,4 @@ print3rs-core ={ path = "../print3rs-core"}
 tracing = "0.1.40"
 futures-util = "0.3.30"
 tokio-serial = "5.4.4"
+tracing-subscriber = "0.3.18"

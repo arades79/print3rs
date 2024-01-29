@@ -27,6 +27,11 @@ async fn main() -> eyre::Result<()> {
     let mut printer: Option<Printer> = None;
     let mut printer_reader = None;
 
+    let tracing_writer = writer.clone();
+    let _tracer = tracing_subscriber::FmtSubscriber::builder()
+        .with_writer(move || tracing_writer.clone())
+        .pretty().finish();
+
     while let ReadlineEvent::Line(line) = readline.readline().await? {
         match commands::parse_command.parse(&line) {
             Ok(command) => match command {
