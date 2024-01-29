@@ -59,12 +59,12 @@ async fn printer_com_task(
             Some(line) = gcoderx.recv() => {
                 serial.write_all(&line).await?;
                 serial.flush().await?;
-                tracing::info!("Sent `{}` to printer", String::from_utf8_lossy(&line));
+                tracing::info!("Sent `{}` to printer", String::from_utf8_lossy(&line).trim());
             },
             Ok(_) = serial.read(&mut buf) => {
-                tracing::debug!("Received `{}` from printer", String::from_utf8_lossy(&buf));
                 let newline = buf.iter().position(|b| *b == b'\n');
                 if let Some(n) = newline {
+                    tracing::debug!("Received `{}` from printer", String::from_utf8_lossy(&buf).trim());
                     let line = buf.split_to(n + 1).freeze();
                     let _ = responsetx.send(line); // ignore errors and keep trying
                 }
