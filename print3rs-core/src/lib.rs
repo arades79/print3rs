@@ -82,7 +82,7 @@ impl Printer {
         let (gcodetx, gcoderx) = mpsc::channel::<Bytes>(8);
         let (response_channel, _) = broadcast::channel(8);
         let _com_task =
-            tokio::task::spawn_local(printer_com_task(port, gcoderx, response_channel.clone()));
+            tokio::task::spawn(printer_com_task(port, gcoderx, response_channel.clone()));
         Self {
             sender: gcodetx,
             response_channel,
@@ -108,7 +108,7 @@ impl Printer {
         let mut sequenced_ok_watch = self.response_channel.subscribe();
         self.sender.send(bytes.clone()).await?;
         let sequence = self.serializer.sequence();
-        let wait_for_response = tokio::task::spawn_local(async move {
+        let wait_for_response = tokio::task::spawn(async move {
             while let Ok(resp) = sequenced_ok_watch.recv().await {
                 match response.parse(&resp) {
                     Ok(Response::SequencedOk(seq)) if seq == sequence => {
