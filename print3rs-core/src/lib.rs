@@ -53,7 +53,7 @@ async fn printer_com_task(
     mut gcoderx: mpsc::Receiver<Bytes>,
     responsetx: broadcast::Sender<Bytes>,
 ) -> Result<(), Error> {
-    let mut buf = BytesMut::new();
+    let mut buf = BytesMut::with_capacity(1024);
     loop {
         tokio::select! {
             Some(line) = gcoderx.recv() => {
@@ -61,17 +61,16 @@ async fn printer_com_task(
                 serial.flush().await?;
                 tracing::debug!("Sent `{}` to printer", String::from_utf8_lossy(&line).trim());
             },
-            Ok(_) = serial.read(&mut buf) => {
+            Ok(_) = serial.read_buf(&mut buf) => {
                 let newline = buf.iter().position(|b| *b == b'\n');
-                tracing::debug!("Received `{}` from printer", String::from_utf8_lossy(&buf).trim());
+                //tracing::debug!("Received `{}` from printer", String::from_utf8_lossy(&buf).trim());
                 if let Some(n) = newline {
                     let line = buf.split_to(n + 1).freeze();
                     let _ = responsetx.send(line); // ignore errors and keep trying
                 }
             },
-            else => ()
+            else => (),
         }
-        tokio::time::sleep(Duration::from_millis(250)).await;
     }
 }
 
