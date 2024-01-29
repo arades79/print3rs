@@ -1,6 +1,7 @@
+use crate::commands::Command;
 use winnow::{
     ascii::{alphanumeric1, float, multispace0, space1},
-    combinator::{alt, preceded, repeat, terminated},
+    combinator::{alt, delimited, preceded, repeat, terminated},
     prelude::*,
     token::take_till,
 };
@@ -17,7 +18,7 @@ fn parse_tag<'a>(input: &mut &'a str) -> PResult<Segment<'a>> {
 
 fn parse_value<'a>(input: &mut &'a str) -> PResult<Segment<'a>> {
     Ok(Segment::Value(
-        preceded("{", terminated(alphanumeric1.recognize(), "}")).parse_next(input)?,
+        delimited("{", alphanumeric1.recognize(), "}").parse_next(input)?,
     ))
 }
 
@@ -26,14 +27,15 @@ fn parse_segment<'a>(input: &mut &'a str) -> PResult<Segment<'a>> {
 }
 
 pub fn parse_segments<'a>(input: &mut &'a str) -> PResult<Vec<Segment<'a>>> {
-    repeat(0.., parse_segment).parse_next(input)
+    repeat(1.., parse_segment).parse_next(input)
 }
 
-pub fn parse_command<'a>(input: &mut &'a str) -> PResult<(&'a str, Vec<Segment<'a>>)> {
+pub fn parse_logger<'a>(input: &mut &'a str) -> PResult<Command<'a>> {
     (
         preceded(space1, alphanumeric1),
         preceded(space1, parse_segments),
     )
+        .map(|(name, segments)| Command::Log(name, segments))
         .parse_next(input)
 }
 

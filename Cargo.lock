@@ -421,6 +421,7 @@ dependencies = [
  "print3rs-core",
  "rustyline-async",
  "tokio",
+ "tokio-serial",
  "tracing",
  "winnow",
 ]
