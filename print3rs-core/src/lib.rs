@@ -47,7 +47,7 @@ pub enum Error {
 }
 
 /// Loop for handling sending/receiving in the background with possible split senders/receivers
-#[tracing::instrument(level = "debug")]
+//#[tracing::instrument(level = "debug")]
 async fn printer_com_task(
     mut serial: Serial,
     mut gcoderx: mpsc::Receiver<Bytes>,
@@ -59,7 +59,7 @@ async fn printer_com_task(
             Some(line) = gcoderx.recv() => {
                 serial.write_all(&line).await?;
                 serial.flush().await?;
-                tracing::info!("Sent `{}` to printer", String::from_utf8_lossy(&line).trim());
+                tracing::debug!("Sent `{}` to printer", String::from_utf8_lossy(&line).trim());
             },
             Ok(_) = serial.read(&mut buf) => {
                 let newline = buf.iter().position(|b| *b == b'\n');
