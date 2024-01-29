@@ -19,6 +19,8 @@ use tracing;
 use bytes::{Bytes, BytesMut};
 
 pub type Serial = SerialStream;
+pub type PrinterLines = broadcast::Receiver<Bytes>;
+pub type PrinterSender = mpsc::Sender<Bytes>;
 
 /// Handle for asynchronous serial communication with a 3D printer
 #[derive(Debug)]
@@ -162,12 +164,12 @@ impl Printer {
     }
 
     /// Obtain a broadcast receiver returning all lines received by the printer
-    pub fn subscribe_lines(&self) -> broadcast::Receiver<Bytes> {
+    pub fn subscribe_lines(&self) -> PrinterLines {
         self.response_channel.subscribe()
     }
 
     /// Obtain a raw bytes sender to send custom messages to the printer e.g. with some custom serializer
-    pub fn get_sender(&self) -> mpsc::Sender<Bytes> {
+    pub fn get_sender(&self) -> PrinterSender {
         self.sender.clone()
     }
 }
