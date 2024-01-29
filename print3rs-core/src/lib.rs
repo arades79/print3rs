@@ -1,4 +1,4 @@
-use std::fmt::Debug;
+use std::{fmt::Debug, time::Duration};
 
 use serde::Serialize;
 use winnow::Parser;
@@ -63,14 +63,15 @@ async fn printer_com_task(
             },
             Ok(_) = serial.read(&mut buf) => {
                 let newline = buf.iter().position(|b| *b == b'\n');
+                tracing::debug!("Received `{}` from printer", String::from_utf8_lossy(&buf).trim());
                 if let Some(n) = newline {
-                    tracing::debug!("Received `{}` from printer", String::from_utf8_lossy(&buf).trim());
                     let line = buf.split_to(n + 1).freeze();
                     let _ = responsetx.send(line); // ignore errors and keep trying
                 }
             },
             else => ()
         }
+        tokio::time::sleep(Duration::from_millis(250)).await;
     }
 }
 
