@@ -14,7 +14,7 @@ fn connect_printer(
     mut printer_lines: PrinterLines,
     mut print_line_writer: SharedWriter,
 ) -> tokio::task::JoinHandle<()> {
-    tokio::task::spawn_local(async move {
+    tokio::task::spawn(async move {
         while let Ok(line) = printer_lines.recv().await {
             print_line_writer.write(&line).await.unwrap_or(0);
         }
