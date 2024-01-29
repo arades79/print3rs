@@ -8,12 +8,24 @@ use tokio_serial::SerialPortBuilderExt;
 use tracing;
 use winnow::Parser;
 
-use print3rs_core::Printer;
+use print3rs_core::{Printer, PrinterLines};
+
+fn connect_printer(
+    mut printer_lines: PrinterLines,
+    mut print_line_writer: SharedWriter,
+) -> tokio::task::JoinHandle<()> {
+    tokio::task::spawn_local(async move {
+        while let Ok(line) = printer_lines.recv().await {
+            print_line_writer.write(&line).await.unwrap_or(0);
+        }
+    })
+}
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> eyre::Result<()> {
     let (mut readline, mut writer) = Readline::new(String::from("> "))?;
     let mut printer: Option<Printer> = None;
+    let mut printer_reader = None;
 
     while let ReadlineEvent::Line(line) = readline.readline().await? {
         match commands::parse_command.parse(&line) {
@@ -42,13 +54,18 @@ async fn main() -> eyre::Result<()> {
                 commands::Command::AutoConnect => {
                     printer = auto_connect().await;
                     let msg = match printer {
-                        Some(_) => "Found printer!\n".as_bytes(),
+                        Some(ref mut printer) => {
+                            let _ = printer_reader
+                                .insert(connect_printer(printer.subscribe_lines(), writer.clone()));
+                            "Found printer!\n".as_bytes()
+                        }
                         None => "Printer not found.\n".as_bytes(),
                     };
                     writer.write(msg).await?;
                 }
                 commands::Command::Disconnect => {
                     printer.take();
+                    printer_reader.take();
                 }
                 commands::Command::Help => help(&mut writer).await,
                 commands::Command::Clear => todo!(),
