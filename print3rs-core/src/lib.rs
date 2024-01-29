@@ -68,7 +68,8 @@ async fn printer_com_task(
                     let line = buf.split_to(n + 1).freeze();
                     let _ = responsetx.send(line); // ignore errors and keep trying
                 }
-            }
+            },
+            else => ()
         }
     }
 }
