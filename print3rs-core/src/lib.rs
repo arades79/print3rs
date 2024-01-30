@@ -49,6 +49,12 @@ pub struct Printer {
     serializer: Serializer,
 }
 
+impl Drop for Printer {
+    fn drop(&mut self) {
+        self._com_task.abort()
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("IO error: {0}")]
@@ -80,8 +86,7 @@ async fn printer_com_task(
                 tracing::debug!("Sent `{}` to printer", String::from_utf8_lossy(&line).trim());
             },
             Ok(_) = serial.read_buf(&mut buf) => {
-                let newline = buf.iter().position(|b| *b == b'\n');
-                if let Some(n) = newline {
+                while let Some(n) = buf.iter().position(|b| *b == b'\n') {
                     let line = buf.split_to(n + 1).freeze();
                     tracing::debug!("Received `{}` from printer", String::from_utf8_lossy(&line).trim());
                     let _ = responsetx.send(line); // ignore errors and keep trying
@@ -99,7 +104,7 @@ impl Printer {
     #[tracing::instrument(level = "debug")]
     pub fn new(port: Serial) -> Self {
         let (gcodetx, gcoderx) = mpsc::channel::<Bytes>(8);
-        let (response_channel, _) = broadcast::channel(8);
+        let (response_channel, _) = broadcast::channel(64);
         let _com_task =
             tokio::task::spawn(printer_com_task(port, gcoderx, response_channel.clone()));
         Self {

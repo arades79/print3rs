@@ -12,24 +12,42 @@ use winnow::{
 use tokio::time::timeout;
 
 use print3rs_core::Printer;
-use tokio_serial::{available_ports, SerialPort, SerialPortBuilderExt, SerialStream};
+use tokio_serial::{
+    available_ports, SerialPort, SerialPortBuilderExt, SerialPortInfo, SerialStream,
+};
+
+async fn check_port(port: SerialPortInfo) -> Option<Printer> {
+    tracing::debug!("checking port {}...", port.port_name);
+    let mut printer_port = tokio_serial::new(port.port_name, 115200)
+        .timeout(std::time::Duration::from_secs(10))
+        .open_native_async()
+        .ok()?;
+    printer_port.write_data_terminal_ready(true).ok()?;
+    let mut printer = Printer::new(printer_port);
+    let mut reader = printer.subscribe_lines();
+    let look_for_ok = tokio::spawn(async move {
+        while let Ok(line) = reader.recv().await {
+            let sline = String::from_utf8_lossy(&line);
+            if sline.to_ascii_lowercase().contains("ok") {
+                return;
+            }
+        }
+    });
+    printer.send_raw(b"M115\n").await.ok()?;
+    timeout(Duration::from_secs(10), look_for_ok)
+        .await
+        .ok()?
+        .ok()?;
+    Some(printer)
+}
 
 pub async fn auto_connect() -> Option<Printer> {
     let ports = available_ports().ok()?;
     tracing::info!("found available ports: {ports:?}");
     for port in ports {
-        tracing::debug!("checking port {}...", port.port_name);
-        let mut printer_port = tokio_serial::new(port.port_name, 115200)
-            .timeout(std::time::Duration::from_secs(10))
-            .open_native_async()
-            .ok()?;
-        printer_port.write_data_terminal_ready(true).ok()?;
-        let mut printer = Printer::new(printer_port);
-        timeout(Duration::from_secs(5), printer.send("M115").await.ok()?)
-            .await
-            .ok()?
-            .ok()?;
-        return Some(printer);
+        if let Some(printer) = check_port(port).await {
+            return Some(printer);
+        }
     }
     None
 }
