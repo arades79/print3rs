@@ -1,7 +1,7 @@
 use crate::commands::Command;
 use winnow::{
-    ascii::{alphanumeric1, float, multispace0, space1},
-    combinator::{alt, delimited, preceded, repeat, terminated},
+    ascii::{alphanumeric1, float, space1},
+    combinator::{alt, delimited, preceded, repeat},
     prelude::*,
     token::take_till,
 };
@@ -54,7 +54,7 @@ pub fn parse_logger<'a>(input: &mut &'a str) -> PResult<Command<'a>> {
         .parse_next(input)
 }
 
-pub fn make_parser<'a>(segments: Vec<Segment<'a>>) -> impl FnMut(&mut &[u8]) -> PResult<Vec<f32>> {
+pub fn make_parser(segments: Vec<Segment<'_>>) -> impl FnMut(&mut &[u8]) -> PResult<Vec<f32>> {
     let segments = segments
         .into_iter()
         .map(|segment| OwnedSegment::from(segment.to_owned()))
