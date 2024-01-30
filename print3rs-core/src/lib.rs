@@ -47,13 +47,13 @@ pub enum Error {
 }
 
 /// Loop for handling sending/receiving in the background with possible split senders/receivers
-//#[tracing::instrument(level = "debug")]
 async fn printer_com_task(
     mut serial: Serial,
     mut gcoderx: mpsc::Receiver<Bytes>,
     responsetx: broadcast::Sender<Bytes>,
 ) -> Result<(), Error> {
     let mut buf = BytesMut::with_capacity(1024);
+    tracing::debug!("Started background printer communications");
     loop {
         tokio::select! {
             Some(line) = gcoderx.recv() => {
@@ -63,9 +63,9 @@ async fn printer_com_task(
             },
             Ok(_) = serial.read_buf(&mut buf) => {
                 let newline = buf.iter().position(|b| *b == b'\n');
-                //tracing::debug!("Received `{}` from printer", String::from_utf8_lossy(&buf).trim());
                 if let Some(n) = newline {
                     let line = buf.split_to(n + 1).freeze();
+                    tracing::debug!("Received `{}` from printer", String::from_utf8_lossy(&line).trim());
                     let _ = responsetx.send(line); // ignore errors and keep trying
                 }
             },
@@ -110,6 +110,7 @@ impl Printer {
         self.sender.send(bytes.clone()).await?;
         let sequence = self.serializer.sequence();
         let wait_for_response = tokio::task::spawn(async move {
+            tracing::debug!("Started looking for Ok {sequence}");
             while let Ok(resp) = sequenced_ok_watch.recv().await {
                 match response.parse(&resp) {
                     Ok(Response::SequencedOk(seq)) if seq == sequence => {
@@ -135,7 +136,6 @@ impl Printer {
     ///
     /// If your printer supports it, the sequenced `send` function is preferred,
     /// although this version is slightly lower overhead.
-    #[tracing::instrument(level = "debug", skip(self))]
     pub async fn send_unsequenced(&mut self, gcode: impl Serialize + Debug) -> Result<(), Error> {
         let bytes = self.serializer.serialize_unsequenced(gcode);
         self.sender.send(bytes.clone()).await?;
@@ -143,7 +143,6 @@ impl Printer {
     }
 
     /// Send any raw sequence of bytes to the printer
-    #[tracing::instrument(level = "debug", skip(self))]
     pub async fn send_raw(&mut self, gcode: &[u8]) -> Result<(), Error> {
         self.sender.send(Bytes::copy_from_slice(gcode)).await?;
         Ok(())
@@ -158,7 +157,6 @@ impl Printer {
     /// it is also high overhead due to establishing a new channel each call.
     ///
     /// If all lines should be processed, use `subscribe_lines`
-    #[tracing::instrument(level = "debug", skip(self))]
     pub async fn read_next_line(&self) -> Result<Bytes, Error> {
         let line = self.response_channel.subscribe().recv().await?;
         Ok(line)
