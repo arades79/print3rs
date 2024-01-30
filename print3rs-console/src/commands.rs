@@ -80,15 +80,16 @@ pub async fn help(writer: &mut rustyline_async::SharedWriter) {
     Arguments with ? are optional.
 
     Available commands:
-    help
-    version
-    print <file>
-    log <name> <pattern>
-    repeat <name> <gcodes>
-    stop <name>
-    connect <path> <baud?>
-    autoconnect
-    disconnect
+    help    <command?>       display this message or details for specified command
+    version                  display version
+    print   <file>           send gcodes from file to printer
+    log     <name> <pattern> begin logging parsed output from printer
+    repeat  <name> <gcodes>  run the given gcodes in a loop until stop
+    stop    <name>           stop an active print, log, or repeat
+    connect <path> <baud?>   connect to a specified serial device at baud (default: 115200)
+    autoconnect              attempt to find and connect to a printer
+    disconnect               disconnect from printer
+    quit                     exit program
     \n"
     ).await.unwrap();
 }
@@ -108,6 +109,7 @@ pub enum Command<'a> {
     Help,
     Version,
     Clear,
+    Quit,
     Unrecognized,
 }
 
@@ -138,6 +140,7 @@ fn inner_command<'a>(input: &mut &'a str) -> PResult<Command<'a>> {
         "connect" => (take_till(1.., [' ']), opt(dec_uint)).map(|(path, baud)| Command::Connect(path, baud)),
         "send" => preceded(space0, parse_gcodes).map(|gcodes| Command::Gcodes(gcodes)),
         "clear" => empty.map(|_| Command::Clear),
+        "quit" | "exit" => empty.map(|_| Command::Quit),
         _ => empty.map(|_| Command::Unrecognized)
     })
     .parse_next(input)?;

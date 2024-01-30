@@ -219,6 +219,7 @@ async fn main() -> eyre::Result<()> {
                     writer.write_all(e.to_string().as_bytes()).await?;
                 }
             },
+            Quit => break,
         };
 
         readline.add_history_entry(line);
