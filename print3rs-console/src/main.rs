@@ -1,7 +1,7 @@
 mod commands;
 mod logging;
 
-use std::collections::HashMap;
+use std::{borrow::Cow, collections::HashMap};
 
 use commands::{auto_connect, help, version};
 use eyre::OptionExt;
@@ -92,17 +92,17 @@ async fn start_logging(
 }
 
 async fn start_repeat(
-    gcodes: Vec<&str>,
+    gcodes: Vec<Cow<'_, str>>,
     printer: &Option<Printer>,
 ) -> eyre::Result<tokio::task::JoinHandle<()>> {
     let printer = printer.as_ref().ok_or_eyre(ERR_NO_PRINTER)?;
 
-    let gcodes: Vec<String> = gcodes.into_iter().map(|s| s.to_owned()).collect();
+    let gcodes: Vec<String> = gcodes.into_iter().map(|s| s.into_owned()).collect();
     let printer_sender = printer.get_sender();
     let printer_reader = printer.subscribe_lines();
     let mut serializer = gcode_serializer::Serializer::default();
     let repeat_task = tokio::spawn(async move {
-        for line in gcodes.iter().cycle() {
+        for ref line in gcodes.iter().cycle() {
             printer_sender
                 .send(serializer.serialize(line))
                 .await
@@ -121,6 +121,11 @@ async fn main() -> eyre::Result<()> {
     let mut printer_reader = None;
 
     let mut background_tasks = HashMap::new();
+
+    commands::version(&mut writer).await;
+    writer
+        .write_all(b"type `:help` for a list of commands\n")
+        .await?;
 
     while let ReadlineEvent::Line(line) = readline.readline().await? {
         let command = match commands::parse_command.parse(&line) {

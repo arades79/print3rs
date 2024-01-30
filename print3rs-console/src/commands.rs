@@ -1,20 +1,17 @@
-use core::time;
-use std::time::Duration;
+use std::{borrow::Cow, time::Duration};
 
 use futures_util::AsyncWriteExt;
 use winnow::{
     ascii::{alpha1, alphanumeric1, dec_uint, space0, space1},
     combinator::{alt, dispatch, empty, fail, opt, preceded, rest, separated},
     prelude::*,
-    token::{any, take_till, take_while},
+    token::take_till,
 };
 
 use tokio::time::timeout;
 
 use print3rs_core::Printer;
-use tokio_serial::{
-    available_ports, SerialPort, SerialPortBuilderExt, SerialPortInfo, SerialStream,
-};
+use tokio_serial::{available_ports, SerialPort, SerialPortBuilderExt, SerialPortInfo};
 
 async fn check_port(port: SerialPortInfo) -> Option<Printer> {
     tracing::debug!("checking port {}...", port.port_name);
@@ -98,10 +95,10 @@ use crate::logging::parsing::{parse_logger, Segment};
 
 #[derive(Debug)]
 pub enum Command<'a> {
-    Gcodes(Vec<&'a str>),
+    Gcodes(Vec<Cow<'a, str>>),
     Print(&'a str),
     Log(&'a str, Vec<Segment<'a>>),
-    Repeat(&'a str, Vec<&'a str>),
+    Repeat(&'a str, Vec<Cow<'a, str>>),
     Stop(&'a str),
     Connect(&'a str, Option<u32>),
     AutoConnect,
@@ -113,8 +110,8 @@ pub enum Command<'a> {
     Unrecognized,
 }
 
-fn parse_gcodes<'a>(input: &mut &'a str) -> PResult<Vec<&'a str>> {
-    separated(0.., take_till(1.., ';'), ';').parse_next(input)
+fn parse_gcodes<'a>(input: &mut &'a str) -> PResult<Vec<Cow<'a, str>>> {
+    separated(0.., take_till(1.., ';').map(Cow::Borrowed), ';').parse_next(input)
 }
 
 fn parse_repeater<'a>(input: &mut &'a str) -> PResult<Command<'a>> {
@@ -131,14 +128,14 @@ fn inner_command<'a>(input: &mut &'a str) -> PResult<Command<'a>> {
     let command = opt(dispatch! {alpha1;
         "log" => parse_logger,
         "repeat" => parse_repeater,
-        "print" => preceded(space0, rest).map(|s| Command::Print(s)),
-        "stop" => preceded(space0, rest).map(|s| Command::Stop(s)),
+        "print" => preceded(space0, rest).map(Command::Print),
+        "stop" => preceded(space0, rest).map(Command::Stop),
         "help" => empty.map(|_| Command::Help),
         "version" => empty.map(|_| Command::Version),
         "autoconnect" => empty.map(|_| Command::AutoConnect),
         "disconnect" => empty.map(|_| Command::Disconnect),
         "connect" => (take_till(1.., [' ']), opt(dec_uint)).map(|(path, baud)| Command::Connect(path, baud)),
-        "send" => preceded(space0, parse_gcodes).map(|gcodes| Command::Gcodes(gcodes)),
+        "send" => preceded(space0, parse_gcodes).map(Command::Gcodes),
         "clear" => empty.map(|_| Command::Clear),
         "quit" | "exit" => empty.map(|_| Command::Quit),
         _ => empty.map(|_| Command::Unrecognized)
@@ -154,7 +151,13 @@ fn inner_command<'a>(input: &mut &'a str) -> PResult<Command<'a>> {
 pub fn parse_command<'a>(input: &mut &'a str) -> PResult<Command<'a>> {
     alt((
         inner_command,
-        parse_gcodes.map(|gcodes| Command::Gcodes(gcodes)),
+        parse_gcodes.map(|gcodes| {
+            let gcodes = gcodes
+                .into_iter()
+                .map(|s| Cow::Owned(s.to_ascii_uppercase()))
+                .collect();
+            Command::Gcodes(gcodes)
+        }),
     ))
     .parse_next(input)
 }
