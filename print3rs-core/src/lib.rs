@@ -1,4 +1,4 @@
-use std::{fmt::Debug, time::Duration};
+use std::fmt::Debug;
 
 use serde::Serialize;
 use winnow::Parser;
@@ -15,7 +15,6 @@ use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     sync::{broadcast, mpsc},
 };
-use tracing;
 
 use bytes::{Bytes, BytesMut};
 
@@ -38,7 +37,7 @@ pub async fn search_for_sequence(sequence: u32, mut responses: PrinterLines) -> 
             _ => (),
         }
     }
-    return Response::Ok;
+    Response::Ok
 }
 
 /// Handle for asynchronous serial communication with a 3D printer
