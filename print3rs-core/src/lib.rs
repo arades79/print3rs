@@ -5,7 +5,8 @@ use winnow::Parser;
 
 mod response;
 
-use response::{response, Response};
+use response::response;
+pub use response::Response;
 use tokio_serial::SerialStream;
 
 use gcode_serializer::Serializer;
@@ -21,6 +22,24 @@ use bytes::{Bytes, BytesMut};
 pub type Serial = SerialStream;
 pub type PrinterLines = broadcast::Receiver<Bytes>;
 pub type PrinterSender = mpsc::Sender<Bytes>;
+
+pub async fn search_for_sequence(sequence: u32, mut responses: PrinterLines) -> Response {
+    tracing::debug!("Started looking for Ok {sequence}");
+    while let Ok(resp) = responses.recv().await {
+        match response.parse(&resp) {
+            Ok(Response::SequencedOk(seq)) if seq == sequence => {
+                tracing::info!("Got Ok for line {seq}");
+                return Response::SequencedOk(seq);
+            }
+            Ok(Response::Resend(seq)) if seq == sequence => {
+                tracing::warn!("Printer requested resend for line {seq}");
+                return Response::Resend(seq);
+            }
+            _ => (),
+        }
+    }
+    return Response::Ok;
+}
 
 /// Handle for asynchronous serial communication with a 3D printer
 #[derive(Debug)]
@@ -106,26 +125,11 @@ impl Printer {
         gcode: impl Serialize + Debug,
     ) -> Result<tokio::task::JoinHandle<Response>, Error> {
         let bytes = self.serializer.serialize(gcode);
-        let mut sequenced_ok_watch = self.response_channel.subscribe();
+        let sequenced_ok_watch = self.response_channel.subscribe();
         self.sender.send(bytes.clone()).await?;
         let sequence = self.serializer.sequence();
-        let wait_for_response = tokio::task::spawn(async move {
-            tracing::debug!("Started looking for Ok {sequence}");
-            while let Ok(resp) = sequenced_ok_watch.recv().await {
-                match response.parse(&resp) {
-                    Ok(Response::SequencedOk(seq)) if seq == sequence => {
-                        tracing::info!("Got Ok for line {seq}");
-                        return Response::SequencedOk(seq);
-                    }
-                    Ok(Response::Resend(seq)) if seq == sequence => {
-                        tracing::warn!("Printer requested resend for line {seq}");
-                        return Response::Resend(seq);
-                    }
-                    _ => (),
-                }
-            }
-            return Response::Ok;
-        });
+        let wait_for_response =
+            tokio::task::spawn(search_for_sequence(sequence, sequenced_ok_watch));
         Ok(wait_for_response)
     }
 

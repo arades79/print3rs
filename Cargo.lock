@@ -466,8 +466,10 @@ version = "0.1.0"
 dependencies = [
  "eyre",
  "futures-util",
+ "gcode-serializer",
  "print3rs-core",
  "rustyline-async",
+ "ryu",
  "tokio",
  "tokio-serial",
  "tracing",

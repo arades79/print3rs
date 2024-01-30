@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use futures_util::AsyncWriteExt;
 use winnow::{
-    ascii::{alpha1, alphanumeric1, dec_uint, space1},
+    ascii::{alpha1, alphanumeric1, dec_uint, space0, space1},
     combinator::{alt, dispatch, empty, fail, opt, preceded, rest, separated},
     prelude::*,
     token::{any, take_till, take_while},
@@ -13,8 +13,6 @@ use tokio::time::timeout;
 
 use print3rs_core::Printer;
 use tokio_serial::{available_ports, SerialPort, SerialPortBuilderExt, SerialStream};
-
-const VERSION: Option<&str> = option_env!("CARGO_PKG_VERSION");
 
 pub async fn auto_connect() -> Option<Printer> {
     let ports = available_ports().ok()?;
@@ -36,13 +34,23 @@ pub async fn auto_connect() -> Option<Printer> {
     None
 }
 
-pub async fn help(writer: &mut rustyline_async::SharedWriter) {
+pub async fn version(writer: &mut rustyline_async::SharedWriter) {
+    const VERSION: Option<&str> = option_env!("CARGO_PKG_VERSION");
+
     writer
         .write_all(
             format!(
-                "
-    print3rs-console version {ver}
-    
+                "print3rs-console version {ver}\n",
+                ver = VERSION.unwrap_or("???")
+            )
+            .as_bytes(),
+        )
+        .await
+        .unwrap_or(());
+}
+
+pub async fn help(writer: &mut rustyline_async::SharedWriter) {
+    writer.write_all(b"    
     commands can be explicitly invoked with ':', e.g. ':log timelogger millis:{{millis}}'
     if ':' is not used, an unrecognized command is sent to the connected printer as a Gcode.
 
@@ -55,19 +63,16 @@ pub async fn help(writer: &mut rustyline_async::SharedWriter) {
 
     Available commands:
     help
+    version
+    print <file>
     log <name> <pattern>
     repeat <name> <gcodes>
+    stop <name>
     connect <path> <baud?>
     autoconnect
     disconnect
-    clear
-    \n",
-                ver = VERSION.unwrap_or("???")
-            )
-            .as_bytes(),
-        )
-        .await
-        .unwrap();
+    \n"
+    ).await.unwrap();
 }
 
 use crate::logging::parsing::{parse_logger, Segment};
@@ -75,12 +80,15 @@ use crate::logging::parsing::{parse_logger, Segment};
 #[derive(Debug)]
 pub enum Command<'a> {
     Gcodes(Vec<&'a str>),
+    Print(&'a str),
     Log(&'a str, Vec<Segment<'a>>),
     Repeat(&'a str, Vec<&'a str>),
+    Stop(&'a str),
     Connect(&'a str, Option<u32>),
     AutoConnect,
     Disconnect,
     Help,
+    Version,
     Clear,
     Unrecognized,
 }
@@ -103,11 +111,14 @@ fn inner_command<'a>(input: &mut &'a str) -> PResult<Command<'a>> {
     let command = opt(dispatch! {alpha1;
         "log" => parse_logger,
         "repeat" => parse_repeater,
+        "print" => preceded(space0, rest).map(|s| Command::Print(s)),
+        "stop" => preceded(space0, rest).map(|s| Command::Stop(s)),
         "help" => empty.map(|_| Command::Help),
+        "version" => empty.map(|_| Command::Version),
         "autoconnect" => empty.map(|_| Command::AutoConnect),
         "disconnect" => empty.map(|_| Command::Disconnect),
         "connect" => (take_till(1.., [' ']), opt(dec_uint)).map(|(path, baud)| Command::Connect(path, baud)),
-        "send" => parse_gcodes.map(|gcodes| Command::Gcodes(gcodes)),
+        "send" => preceded(space0, parse_gcodes).map(|gcodes| Command::Gcodes(gcodes)),
         "clear" => empty.map(|_| Command::Clear),
         _ => empty.map(|_| Command::Unrecognized)
     })

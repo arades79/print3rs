@@ -12,6 +12,21 @@ pub enum Segment<'a> {
     Value(&'a str),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum OwnedSegment {
+    Tag(String),
+    Value,
+}
+
+impl<'a> From<Segment<'a>> for OwnedSegment {
+    fn from(value: Segment<'a>) -> Self {
+        match value {
+            Segment::Tag(s) => OwnedSegment::Tag(s.to_string()),
+            Segment::Value(_) => OwnedSegment::Value,
+        }
+    }
+}
+
 fn parse_tag<'a>(input: &mut &'a str) -> PResult<Segment<'a>> {
     Ok(Segment::Tag(take_till(1.., '{').parse_next(input)?))
 }
@@ -39,17 +54,19 @@ pub fn parse_logger<'a>(input: &mut &'a str) -> PResult<Command<'a>> {
         .parse_next(input)
 }
 
-pub fn make_parser<'a, 'b>(
-    segments: &'b [Segment<'a>],
-) -> impl FnMut(&mut &'b str) -> PResult<Vec<f32>> {
-    move |input: &mut &'b str| -> PResult<Vec<f32>> {
+pub fn make_parser<'a>(segments: Vec<Segment<'a>>) -> impl FnMut(&mut &[u8]) -> PResult<Vec<f32>> {
+    let segments = segments
+        .into_iter()
+        .map(|segment| OwnedSegment::from(segment.to_owned()))
+        .collect::<Vec<_>>();
+    move |input: &mut &[u8]| -> PResult<Vec<f32>> {
         let mut values = vec![];
-        for segment in segments {
+        for segment in segments.iter() {
             match segment {
-                Segment::Tag(mut s) => {
-                    s.parse_next(input)?;
+                OwnedSegment::Tag(ref s) => {
+                    s.as_bytes().parse_next(input)?;
                 }
-                Segment::Value(_) => {
+                OwnedSegment::Value => {
                     values.push(float.parse_next(input)?);
                 }
             };
@@ -98,8 +115,10 @@ mod tests {
     fn test_parsed_parser() {
         let parse_pattern = "millis: {millis},pos:{pos},current:{current}";
         let segments = parse_segments.parse(parse_pattern).unwrap();
-        let mut parser = make_parser(&segments);
-        let final_out = parser.parse("millis: 1234.5,pos:-4.0,current:100").unwrap();
+        let mut parser = make_parser(segments);
+        let final_out = parser
+            .parse(b"millis: 1234.5,pos:-4.0,current:100")
+            .unwrap();
         assert_eq!(final_out, vec![1234.5, -4.0, 100.0]);
     }
 }
