@@ -20,7 +20,7 @@ fn connect_printer(
 ) -> tokio::task::JoinHandle<()> {
     tokio::task::spawn(async move {
         while let Ok(line) = printer_lines.recv().await {
-            print_line_writer.write_all(&line).await.unwrap_or(());
+            print_line_writer.write_all(&line).await.unwrap_or_default();
         }
     })
 }
@@ -44,7 +44,7 @@ async fn start_print_file(
             printer_sender
                 .send(serializer.serialize(line))
                 .await
-                .unwrap_or(());
+                .unwrap_or_default();
             print3rs_core::search_for_sequence(serializer.sequence(), printer_reader.resubscribe())
                 .await;
         }
@@ -84,7 +84,7 @@ async fn start_logging(
                 }
                 record_bytes.pop(); // remove trailing ','
                 record_bytes.push(b'\n');
-                log_file.write_all(&record_bytes).await.unwrap_or(());
+                log_file.write_all(&record_bytes).await.unwrap_or_default();
             }
         }
     });
@@ -106,7 +106,7 @@ async fn start_repeat(
             printer_sender
                 .send(serializer.serialize(line))
                 .await
-                .unwrap_or(());
+                .unwrap_or_default();
             print3rs_core::search_for_sequence(serializer.sequence(), printer_reader.resubscribe())
                 .await;
         }
