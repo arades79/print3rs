@@ -122,12 +122,6 @@ async fn main() -> eyre::Result<()> {
 
     let mut background_tasks = HashMap::new();
 
-    let tracing_writer = writer.clone();
-    let _tracer = tracing_subscriber::FmtSubscriber::builder()
-        .with_writer(move || tracing_writer.clone())
-        .pretty()
-        .finish();
-
     while let ReadlineEvent::Line(line) = readline.readline().await? {
         let command = match commands::parse_command.parse(&line) {
             Ok(command) => command,
