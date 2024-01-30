@@ -141,7 +141,7 @@ async fn main() -> eyre::Result<()> {
             Gcodes(gcodes) => {
                 if let Some(ref mut printer) = printer {
                     for line in gcodes {
-                        printer.send_unsequenced(line.as_bytes()).await?;
+                        printer.send_unsequenced(line).await?;
                     }
                 } else {
                     writer
