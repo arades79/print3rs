@@ -64,31 +64,47 @@ pub async fn version(writer: &mut rustyline_async::SharedWriter) {
         .unwrap_or(());
 }
 
-pub async fn help(writer: &mut rustyline_async::SharedWriter) {
-    writer.write_all(b"    
-    commands can be explicitly invoked with ':', e.g. ':log timelogger millis:{{millis}}'
-    if ':' is not used, an unrecognized command is sent to the connected printer as a Gcode.
+static FULL_HELP: &[u8] = b"    
+commands can be explicitly invoked with ':', e.g. ':log timelogger millis:{{millis}}'
+if ':' is not used, an unrecognized command is uppercased and sent to the connected printer.
 
-    Some commands, including Gcodes, cannot be ran until a printer is connected.
-    Some printers support 'autoconnect', otherwise you will need to connect using the serial port name.
+example: `> g28` will send `G28` to the printer. 
 
-    Multiple Gcodes can be sent on the same line by separating with ';'.
+Some commands, including Gcodes, cannot be ran until a printer is connected.
+Some printers support 'autoconnect', otherwise you will need to connect using the serial port name.
 
-    Arguments with ? are optional.
+Multiple Gcodes can be sent on the same line by separating with ';'.
 
-    Available commands:
-    help    <command?>       display this message or details for specified command
-    version                  display version
-    print   <file>           send gcodes from file to printer
-    log     <name> <pattern> begin logging parsed output from printer
-    repeat  <name> <gcodes>  run the given gcodes in a loop until stop
-    stop    <name>           stop an active print, log, or repeat
-    connect <path> <baud?>   connect to a specified serial device at baud (default: 115200)
-    autoconnect              attempt to find and connect to a printer
-    disconnect               disconnect from printer
-    quit                     exit program
-    \n"
-    ).await.unwrap();
+Arguments with ? are optional.
+
+Available commands:
+help    <command?>       display this message or details for specified command
+version                  display version
+print   <file>           send gcodes from file to printer
+log     <name> <pattern> begin logging parsed output from printer
+repeat  <name> <gcodes>  run the given gcodes in a loop until stop
+stop    <name>           stop an active print, log, or repeat
+send    <gcodes>         explicitly send commands (split by ;) to printer exactly as typed
+connect <path> <baud?>   connect to a specified serial device at baud (default: 115200)
+autoconnect              attempt to find and connect to a printer
+disconnect               disconnect from printer
+quit                     exit program
+\n";
+
+pub async fn help(writer: &mut rustyline_async::SharedWriter, command: &str) {
+    let command = command.trim().strip_prefix(":").unwrap_or(command.trim());
+    let msg: &[u8] = match command {
+        "send" => b"send    <gcodes>         explicitly send commands (split by ;) to printer exactly as typed\n",
+        "print" => b"print\n",
+        "log" => b"log\n",
+        "repeat" => b"repeat\n",
+        "stop" => b"stop\n",
+        "connect" => b"connect\n",
+        "autoconnect" => b"autoconnect\n",
+        "disconnect" => b"disconnect\n",
+        _ => FULL_HELP,
+    };
+    writer.write_all(msg).await.unwrap_or_default();
 }
 
 use crate::logging::parsing::{parse_logger, Segment};
@@ -103,7 +119,7 @@ pub enum Command<'a> {
     Connect(&'a str, Option<u32>),
     AutoConnect,
     Disconnect,
-    Help,
+    Help(&'a str),
     Version,
     Clear,
     Quit,
@@ -130,7 +146,7 @@ fn inner_command<'a>(input: &mut &'a str) -> PResult<Command<'a>> {
         "repeat" => parse_repeater,
         "print" => preceded(space0, rest).map(Command::Print),
         "stop" => preceded(space0, rest).map(Command::Stop),
-        "help" => empty.map(|_| Command::Help),
+        "help" => rest.map(Command::Help),
         "version" => empty.map(|_| Command::Version),
         "autoconnect" => empty.map(|_| Command::AutoConnect),
         "disconnect" => empty.map(|_| Command::Disconnect),

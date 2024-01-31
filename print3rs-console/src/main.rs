@@ -189,7 +189,7 @@ async fn main() -> eyre::Result<()> {
                 printer.take();
                 printer_reader.take();
             }
-            Help => help(&mut writer).await,
+            Help(sub) => help(&mut writer, sub).await,
             Version => version(&mut writer).await,
             Clear => {
                 writer.write_all(b"Press 'Ctrl+L' to clear\n").await?;
