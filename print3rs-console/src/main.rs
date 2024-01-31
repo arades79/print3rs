@@ -9,7 +9,6 @@ use futures_util::AsyncWriteExt;
 use rustyline_async::{Readline, ReadlineEvent, SharedWriter};
 use tokio::io::{AsyncReadExt, AsyncWriteExt as TokioAsyncWrite};
 use tokio_serial::SerialPortBuilderExt;
-use tracing;
 use winnow::Parser;
 
 use print3rs_core::{Printer, PrinterLines};
@@ -169,7 +168,7 @@ async fn main() -> eyre::Result<()> {
                 };
             }
             Connect(path, baud) => {
-                let _ = printer.insert(Printer::new(
+                printer = Some(Printer::new(
                     tokio_serial::new(path, baud.unwrap_or(115200)).open_native_async()?,
                 ));
             }
