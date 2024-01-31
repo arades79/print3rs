@@ -50,12 +50,7 @@ impl Serializer {
 
     pub fn serialize_unsequenced(&self, t: impl Serialize) -> Bytes {
         let mut temp_buffer = BytesMut::new();
-        let mut line_writer = GcodeLineWriter {
-            buffer: &mut temp_buffer,
-            sequence: None,
-            checksum: 0,
-        };
-        line_writer.serialize(t).finish();
+        self.serialize_unsequenced_into(&mut temp_buffer, t);
         temp_buffer.split().freeze()
     }
 }
@@ -73,9 +68,10 @@ impl<B> Serializer<B> {
     }
 
     pub fn serialize_into(&mut self, buffer: &mut impl BufMut, t: impl Serialize) {
+        self.sequence += 1;
         let mut line_writer = GcodeLineWriter {
             buffer,
-            sequence: Some(self.sequence + 1),
+            sequence: Some(self.sequence),
             checksum: 0,
         };
         line_writer
