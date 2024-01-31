@@ -3,9 +3,6 @@ use serde::{
     Serialize,
 };
 
-use itoa;
-use ryu;
-
 use bytes::{BufMut, Bytes, BytesMut};
 
 #[derive(Debug)]
@@ -35,18 +32,14 @@ impl Default for UnbufferedSerializer {
 }
 
 impl Serializer {
-    fn start_unsequenced_line(&mut self) -> GcodeLineWriter<BytesMut> {
-        GcodeLineWriter {
-            buffer: &mut self.buffer,
-            sequence: None,
-            checksum: 0,
-        }
-    }
     fn start_line(&mut self) -> GcodeLineWriter<BytesMut> {
         self.sequence += 1;
         let sequence = self.sequence;
-        let mut line = self.start_unsequenced_line();
-        line.sequence = Some(sequence);
+        let mut line = GcodeLineWriter {
+            buffer: &mut self.buffer,
+            sequence: Some(sequence),
+            checksum: 0,
+        };
         line.serialize('N').serialize(sequence);
         line
     }
@@ -55,9 +48,15 @@ impl Serializer {
         self.buffer.split().freeze()
     }
 
-    pub fn serialize_unsequenced(&mut self, t: impl Serialize) -> Bytes {
-        self.start_unsequenced_line().serialize(t).finish();
-        self.buffer.split().freeze()
+    pub fn serialize_unsequenced(&self, t: impl Serialize) -> Bytes {
+        let mut temp_buffer = BytesMut::new();
+        let mut line_writer = GcodeLineWriter {
+            buffer: &mut temp_buffer,
+            sequence: None,
+            checksum: 0,
+        };
+        line_writer.serialize(t).finish();
+        temp_buffer.split().freeze()
     }
 }
 
