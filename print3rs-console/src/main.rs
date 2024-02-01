@@ -103,7 +103,8 @@ async fn main() -> eyre::Result<()> {
     static DISCONNECTED: &str = "(Disconnected)";
     static CONNECTED: &str = "(Connected)";
 
-    let (mut readline, mut writer) = Readline::new(format!("{DISCONNECTED} >"))?;
+    let (mut readline, mut writer) = Readline::new(format!("{DISCONNECTED}> "))?;
+
     let mut printer: Option<Printer> = None;
     let mut printer_reader = None;
 
@@ -167,7 +168,7 @@ async fn main() -> eyre::Result<()> {
                     Some(ref mut printer) => {
                         printer_reader =
                             Some(connect_printer(printer.subscribe_lines(), writer.clone()));
-                        readline.set_prompt(format!("{CONNECTED} >"));
+                        readline.set_prompt(format!("{CONNECTED}> "));
                         "Found printer!\n".as_bytes()
                     }
                     None => "Printer not found.\n".as_bytes(),
@@ -212,6 +213,6 @@ async fn main() -> eyre::Result<()> {
 
         readline.add_history_entry(line);
     }
-
+    readline.flush()?;
     Ok(())
 }
