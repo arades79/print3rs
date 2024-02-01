@@ -5,7 +5,7 @@ use serde::{
 
 use core::sync::atomic::{AtomicI32 as Ai32, Ordering};
 
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::{BufMut, BytesMut};
 
 static SEQUENCE: Ai32 = Ai32::new(1);
 
@@ -19,8 +19,14 @@ pub type UnbufferedSerializer = Serializer<()>;
 impl Default for Serializer {
     fn default() -> Self {
         Self {
-            buffer: BytesMut::with_capacity(128),
+            buffer: BytesMut::with_capacity(64),
         }
+    }
+}
+
+impl<B> Clone for Serializer<B> where Serializer<B>: Default{
+    fn clone(&self) -> Self {
+        Default::default()
     }
 }
 
@@ -44,15 +50,15 @@ impl Serializer {
         line.serialize('N').serialize(sequence);
         line
     }
-    pub fn serialize(&mut self, t: impl Serialize) -> Bytes {
-        self.start_line().serialize(t).finish();
-        self.buffer.split().freeze()
+    pub fn serialize(&mut self, t: impl Serialize) -> (i32, BytesMut) {
+        let sequence = self.start_line().serialize(t).finish();
+        (sequence, self.buffer.split())
     }
 
-    pub fn serialize_unsequenced(&self, t: impl Serialize) -> Bytes {
+    pub fn serialize_unsequenced(&self, t: impl Serialize) -> BytesMut {
         let mut temp_buffer = BytesMut::new();
         self.serialize_unsequenced_into(&mut temp_buffer, t);
-        temp_buffer.split().freeze()
+        temp_buffer.split()
     }
 }
 
@@ -61,7 +67,7 @@ impl<B> Serializer<B> {
         Self { buffer }
     }
 
-    pub fn serialize_into(&mut self, buffer: &mut impl BufMut, t: impl Serialize) {
+    pub fn serialize_into(&mut self, buffer: &mut impl BufMut, t: impl Serialize) -> i32 {
         let sequence = SEQUENCE.fetch_add(1, Ordering::SeqCst);
         let mut line_writer = GcodeLineWriter {
             buffer,
@@ -72,7 +78,7 @@ impl<B> Serializer<B> {
             .serialize('N')
             .serialize(sequence)
             .serialize(t)
-            .finish();
+            .finish()
     }
 
     pub fn serialize_unsequenced_into(&self, buffer: &mut impl BufMut, t: impl Serialize) {
@@ -109,13 +115,16 @@ where
         t.serialize(&mut *self).expect("Infallible");
         self
     }
-    fn finish(&mut self) {
+
+    /// finish the current line and give the sequence number of it for tracking, 0 for unsequenced
+    fn finish(&mut self) -> i32 {
         if let Some(_sequence) = self.sequence {
             self.buffer.put_u8(b'*');
             self.buffer
                 .put(itoa::Buffer::new().format(self.checksum).as_bytes());
         };
         self.buffer.put_u8(b'\n');
+        self.sequence.unwrap_or_default()
     }
 }
 
@@ -511,6 +520,7 @@ where
 mod test {
     use super::*;
     use serde::Serialize;
+    use serial_test::serial;
 
     #[derive(Serialize)]
     struct M1234;
@@ -521,19 +531,9 @@ mod test {
         y: f32,
     }
 
-    static SEQUENCE_LOCK: std::sync::OnceLock<std::sync::Arc<std::sync::Mutex<()>>> =
-        std::sync::OnceLock::new();
-
-    fn locker() -> std::sync::Arc<std::sync::Mutex<()>> {
-        let a_sequence =
-            SEQUENCE_LOCK.get_or_init(|| std::sync::Arc::new(std::sync::Mutex::default()));
-        a_sequence.clone()
-    }
-
     #[test]
+    #[serial]
     fn unit_serialize_works() {
-        let locker = locker();
-        let _lock = locker.lock();
         SEQUENCE.store(1, Ordering::SeqCst);
         let mut writer = Serializer::default();
         let out = writer.serialize_unsequenced(M1234);
@@ -542,31 +542,30 @@ mod test {
 
         let out = writer.serialize(G1234 { x: -1, y: 2.3 });
         let expected: &[u8] = b"N1G1234X-1Y2.3*14\n";
-        assert_eq!(out, expected);
+        assert_eq!(out.1, expected);
     }
 
     #[test]
+    #[serial]
     fn atomic_counter() {
-        let locker = locker();
-        let _lock = locker.lock();
         SEQUENCE.store(1, Ordering::SeqCst);
         let mut writer1 = Serializer::default();
         let mut writer2 = Serializer::default();
 
         let out = writer1.serialize(G1234 { x: -1, y: 2.3 });
         let expected: &[u8] = b"N1G1234X-1Y2.3*14\n";
-        assert_eq!(out, expected);
+        assert_eq!(out.1, expected);
 
         std::thread::spawn(move || {
             let out = writer2.serialize(G1234 { x: -1, y: 2.3 });
             let expected: &[u8] = b"N2G1234X-1Y2.3*13\n";
-            assert_eq!(out, expected);
+            assert_eq!(out.1, expected);
         })
         .join()
         .unwrap();
 
         let out = writer1.serialize(G1234 { x: -1, y: 2.3 });
         let expected: &[u8] = b"N3G1234X-1Y2.3*12\n";
-        assert_eq!(out, expected);
+        assert_eq!(out.1, expected);
     }
 }
