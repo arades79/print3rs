@@ -150,7 +150,7 @@ fn inner_command<'a>(input: &mut &'a str) -> PResult<Command<'a>> {
         "version" => empty.map(|_| Command::Version),
         "autoconnect" => empty.map(|_| Command::AutoConnect),
         "disconnect" => empty.map(|_| Command::Disconnect),
-        "connect" => (take_till(1.., [' ']), opt(dec_uint)).map(|(path, baud)| Command::Connect(path, baud)),
+        "connect" => (preceded(space0, take_till(1.., [' '])), preceded(space0,opt(dec_uint))).map(|(path, baud)| Command::Connect(path, baud)),
         "send" => preceded(space0, parse_gcodes).map(Command::Gcodes),
         "clear" => empty.map(|_| Command::Clear),
         "quit" | "exit" => empty.map(|_| Command::Quit),
