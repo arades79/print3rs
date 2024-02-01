@@ -11,10 +11,10 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt as TokioAsyncWrite};
 use tokio_serial::SerialPortBuilderExt;
 use winnow::Parser;
 
-use print3rs_core::{Printer, PrinterLines};
+use print3rs_core::{LineStream, Printer};
 
 fn connect_printer(
-    mut printer_lines: PrinterLines,
+    mut printer_lines: LineStream,
     mut print_line_writer: SharedWriter,
 ) -> tokio::task::JoinHandle<()> {
     tokio::task::spawn(async move {
@@ -35,17 +35,10 @@ async fn start_print_file(
     let mut file = tokio::fs::File::open(filename).await?;
     let mut file_contents = String::new();
     file.read_to_string(&mut file_contents).await?;
-    let printer_sender = printer.get_sender();
-    let printer_reader = printer.subscribe_lines();
-    let mut serializer = gcode_serializer::Serializer::default();
+    let mut socket = printer.socket();
     let task = tokio::spawn(async move {
         for line in file_contents.lines() {
-            printer_sender
-                .send(serializer.serialize(line))
-                .await
-                .unwrap_or_default();
-            print3rs_core::search_for_sequence(serializer.sequence(), printer_reader.resubscribe())
-                .await;
+            socket.send(line).await.unwrap().await.unwrap();
         }
     });
     Ok(task)
@@ -95,19 +88,11 @@ async fn start_repeat(
     printer: &Option<Printer>,
 ) -> eyre::Result<tokio::task::JoinHandle<()>> {
     let printer = printer.as_ref().ok_or_eyre(ERR_NO_PRINTER)?;
-
     let gcodes: Vec<String> = gcodes.into_iter().map(|s| s.into_owned()).collect();
-    let printer_sender = printer.get_sender();
-    let printer_reader = printer.subscribe_lines();
-    let mut serializer = gcode_serializer::Serializer::default();
+    let mut socket = printer.socket();
     let repeat_task = tokio::spawn(async move {
-        for ref line in gcodes.iter().cycle() {
-            printer_sender
-                .send(serializer.serialize(line))
-                .await
-                .unwrap_or_default();
-            print3rs_core::search_for_sequence(serializer.sequence(), printer_reader.resubscribe())
-                .await;
+        for ref line in gcodes.into_iter().cycle() {
+            socket.send(line).await.unwrap().await.unwrap();
         }
     });
     Ok(repeat_task)
@@ -115,7 +100,10 @@ async fn start_repeat(
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> eyre::Result<()> {
-    let (mut readline, mut writer) = Readline::new(String::from("> "))?;
+    static DISCONNECTED: &str = "(Disconnected)";
+    static CONNECTED: &str = "(Connected)";
+
+    let (mut readline, mut writer) = Readline::new(format!("{DISCONNECTED} >"))?;
     let mut printer: Option<Printer> = None;
     let mut printer_reader = None;
 
@@ -173,11 +161,13 @@ async fn main() -> eyre::Result<()> {
                 ));
             }
             AutoConnect => {
+                writer.write_all(b"Connecting...\n").await?;
                 printer = auto_connect().await;
                 let msg = match printer {
                     Some(ref mut printer) => {
                         printer_reader =
                             Some(connect_printer(printer.subscribe_lines(), writer.clone()));
+                        readline.set_prompt(format!("{CONNECTED} >"));
                         "Found printer!\n".as_bytes()
                     }
                     None => "Printer not found.\n".as_bytes(),
