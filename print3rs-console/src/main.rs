@@ -100,11 +100,10 @@ async fn start_repeat(
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> eyre::Result<()> {
-    static DISCONNECTED: &str = "(Disconnected)";
-    static CONNECTED: &str = "(Connected)";
+    static PROMPT_DISCONNECTED: &str = "[disconnected]> ";
+    static PROMPT_CONNECTED: &str = "[connected]> ";
 
-    let (mut readline, mut writer) = Readline::new(format!("{DISCONNECTED}> "))?;
-
+    let (mut readline, mut writer) = Readline::new(PROMPT_DISCONNECTED.to_string())?;
     let mut printer: Option<Printer> = None;
     let mut printer_reader = None;
 
@@ -157,9 +156,20 @@ async fn main() -> eyre::Result<()> {
                 };
             }
             Connect(path, baud) => {
-                printer = Some(Printer::new(
-                    tokio_serial::new(path, baud.unwrap_or(115200)).open_native_async()?,
-                ));
+                printer = match tokio_serial::new(path, baud.unwrap_or(115200)).open_native_async()
+                {
+                    Ok(serial) => {
+                        readline.update_prompt(PROMPT_CONNECTED.to_string())?;
+                        Some(Printer::new(serial))
+                    }
+                    Err(e) => {
+                        writer
+                            .write_all(format!("Connection failed!\nError: {e}\n").as_bytes())
+                            .await?;
+                        None
+                    }
+                };
+                readline.update_prompt(PROMPT_CONNECTED.to_string())?;
             }
             AutoConnect => {
                 writer.write_all(b"Connecting...\n").await?;
@@ -168,7 +178,7 @@ async fn main() -> eyre::Result<()> {
                     Some(ref mut printer) => {
                         printer_reader =
                             Some(connect_printer(printer.subscribe_lines(), writer.clone()));
-                        readline.set_prompt(format!("{CONNECTED}> "));
+                        readline.update_prompt(PROMPT_CONNECTED.to_string())?;
                         "Found printer!\n".as_bytes()
                     }
                     None => "Printer not found.\n".as_bytes(),
@@ -178,6 +188,8 @@ async fn main() -> eyre::Result<()> {
             Disconnect => {
                 printer.take();
                 printer_reader.take();
+                readline.update_prompt(PROMPT_DISCONNECTED.to_string())?;
+                readline.flush()?;
             }
             Help(sub) => help(&mut writer, sub).await,
             Version => version(&mut writer).await,
