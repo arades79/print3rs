@@ -7,8 +7,8 @@ use winnow::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Response {
     Ok,
-    SequencedOk(u32),
-    Resend(u32),
+    SequencedOk(i32),
+    Resend(i32),
 }
 
 fn ok_response(input: &mut &[u8]) -> PResult<Response> {

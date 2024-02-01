@@ -1,6 +1,6 @@
 use std::{
     fmt::Debug,
-    sync::atomic::{AtomicU32 as Au32, Ordering},
+    ops::{Deref, DerefMut},
 };
 
 use serde::Serialize;
@@ -22,9 +22,9 @@ use tokio::{
 use bytes::{Bytes, BytesMut};
 
 pub type Serial = SerialStream;
-pub type PrinterLines = broadcast::Receiver<Bytes>;
+pub type LineStream = broadcast::Receiver<Bytes>;
 
-pub async fn search_for_sequence(sequence: u32, mut responses: PrinterLines) -> Response {
+pub async fn search_for_sequence(sequence: i32, mut responses: LineStream) -> Response {
     tracing::debug!("Started looking for Ok {sequence}");
     while let Ok(resp) = responses.recv().await {
         match response.parse(&resp) {
@@ -42,13 +42,14 @@ pub async fn search_for_sequence(sequence: u32, mut responses: PrinterLines) -> 
     Response::Ok
 }
 
-trait PrinterSender {
-    fn get_sender(&self) -> &mpsc::Sender<Bytes>;
-    fn get_global_sequence(&self) -> &Au32;
-    fn get_serializer(&self) -> &Serializer;
-    fn get_mut_serializer(&mut self) -> &mut Serializer;
-    fn get_response_channel(&self) -> &broadcast::Sender<Bytes>;
+#[derive(Debug, Clone)]
+pub struct Socket {
+    sender: mpsc::Sender<Bytes>,
+    serializer: Serializer,
+    pub responses: broadcast::Sender<Bytes>,
+}
 
+impl Socket {
     /// Serialize a struct implementing Serialize and send the bytes to the printer
     ///
     /// Sent bytes will include a sequence number and checksum.
@@ -58,24 +59,14 @@ trait PrinterSender {
     /// The handle to this task is returned after the first await on success.
     /// This allows simple synchronization of any sent command by awaiting twice.
     #[tracing::instrument(level = "debug", skip(self))]
-    async fn send(
+    pub async fn send(
         &mut self,
         gcode: impl Serialize + Debug,
     ) -> Result<tokio::task::JoinHandle<Response>, Error> {
-        let mut bytes = self.get_mut_serializer().serialize(gcode);
-        let sequence = self.get_serializer().sequence();
-        let send_slot = self.get_sender().reserve().await?;
-        let sequenced_ok_watch = self.get_response_channel().subscribe();
-        let global_sequence = self.get_global_sequence().load(Ordering::SeqCst);
-        if global_sequence != sequence - 1 {
-            let mut new_bytes = BytesMut::new();
-            self.get_serializer()
-                .serialize_unsequenced_into(&mut new_bytes, ("M110N", sequence - 1));
-            new_bytes.extend_from_slice(&bytes);
-            bytes = new_bytes.freeze();
-        }
-        send_slot.send(bytes);
-        self.get_global_sequence().store(sequence, Ordering::SeqCst);
+        let send_slot = self.sender.reserve().await?;
+        let (sequence, bytes) = self.serializer.serialize(gcode);
+        let sequenced_ok_watch = self.responses.subscribe();
+        send_slot.send(bytes.freeze());
         let wait_for_response =
             tokio::task::spawn(search_for_sequence(sequence, sequenced_ok_watch));
         Ok(wait_for_response)
@@ -88,58 +79,41 @@ trait PrinterSender {
     ///
     /// If your printer supports it, the sequenced `send` function is preferred,
     /// although this version is slightly lower overhead.
-    async fn send_unsequenced(&self, gcode: impl Serialize + Debug) -> Result<(), Error> {
-        let bytes = self.get_serializer().serialize_unsequenced(gcode);
-        self.get_sender().send(bytes.clone()).await?;
+    pub async fn send_unsequenced(&self, gcode: impl Serialize + Debug) -> Result<(), Error> {
+        let bytes = self.serializer.serialize_unsequenced(gcode);
+        self.sender.send(bytes.freeze()).await?;
         Ok(())
     }
 
     /// Send any raw sequence of bytes to the printer
-    async fn send_raw(&self, gcode: &[u8]) -> Result<(), Error> {
-        self.get_sender()
-            .send(Bytes::copy_from_slice(gcode))
-            .await?;
+    pub async fn send_raw(&self, gcode: &[u8]) -> Result<(), Error> {
+        self.sender.send(Bytes::copy_from_slice(gcode)).await?;
         Ok(())
     }
-}
 
-#[derive(Debug)]
-pub struct ChildPrinterSender<'printer> {
-    pub sender: mpsc::Sender<Bytes>,
-    serializer: Serializer,
-    pub response_channel_handle: &'printer broadcast::Sender<Bytes>,
-    global_sequence: &'printer Au32,
-}
-
-impl<'printer> PrinterSender for ChildPrinterSender<'printer> {
-    fn get_sender(&self) -> &mpsc::Sender<Bytes> {
-        &self.sender
+    /// Retrieve the next line to come in from the printer.
+    ///
+    /// There is no buffering of lines for this method,
+    /// only a line which comes in after this call will be returned.
+    ///
+    /// Because of this, there's a reasonable chance of missing lines with this method,
+    /// it is also high overhead due to establishing a new channel each call.
+    ///
+    /// If all lines should be processed, use `subscribe_lines`
+    pub async fn read_next_line(&self) -> Result<Bytes, Error> {
+        let line = self.responses.subscribe().recv().await?;
+        Ok(line)
     }
 
-    fn get_global_sequence(&self) -> &Au32 {
-        self.global_sequence
-    }
-
-    fn get_serializer(&self) -> &Serializer {
-        &self.serializer
-    }
-
-    fn get_mut_serializer(&mut self) -> &mut Serializer {
-        &mut self.serializer
-    }
-
-    fn get_response_channel(&self) -> &broadcast::Sender<Bytes> {
-        self.response_channel_handle
+    /// Obtain a broadcast receiver returning all lines received by the printer
+    pub fn subscribe_lines(&self) -> LineStream {
+        self.responses.subscribe()
     }
 }
 
 /// Handle for asynchronous serial communication with a 3D printer
-#[derive(Debug)]
 pub struct Printer {
-    pub sender: mpsc::Sender<Bytes>,
-    serializer: Serializer,
-    global_sequence: Au32,
-    pub response_channel: broadcast::Sender<Bytes>,
+    socket: Socket,
     com_task: tokio::task::JoinHandle<Result<(), Error>>,
 }
 
@@ -165,6 +139,9 @@ pub enum Error {
 
     #[error("Couldn't retreive data from background task\nError message: {0}")]
     ResponseReceiver(#[from] broadcast::error::RecvError),
+
+    #[error("Underlying printer connection was closed")]
+    Disconnected,
 }
 
 /// Loop for handling sending/receiving in the background with possible split senders/receivers
@@ -189,7 +166,7 @@ async fn printer_com_task(
                     let _ = responsetx.send(line); // ignore errors and keep trying
                 }
             },
-            else => (),
+            else => break Err(Error::Disconnected),
         }
     }
 }
@@ -201,68 +178,35 @@ impl Printer {
     #[tracing::instrument(level = "debug")]
     pub fn new(port: Serial) -> Self {
         let (sender, gcoderx) = mpsc::channel::<Bytes>(8);
-        let (response_channel, _) = broadcast::channel(64);
-        let com_task =
-            tokio::task::spawn(printer_com_task(port, gcoderx, response_channel.clone()));
-        let global_sequence = Au32::new(0);
+        let (responses, _) = broadcast::channel(64);
+        let com_task = tokio::task::spawn(printer_com_task(port, gcoderx, responses.clone()));
         let serializer = Serializer::default();
         Self {
-            sender,
-            serializer,
-            global_sequence,
-            response_channel,
+            socket: Socket {
+                sender,
+                serializer,
+                responses,
+            },
             com_task,
         }
     }
 
-    /// Retrieve the next line to come in from the printer.
-    ///
-    /// There is no buffering of lines for this method,
-    /// only a line which comes in after this call will be returned.
-    ///
-    /// Because of this, there's a reasonable chance of missing lines with this method,
-    /// it is also high overhead due to establishing a new channel each call.
-    ///
-    /// If all lines should be processed, use `subscribe_lines`
-    pub async fn read_next_line(&self) -> Result<Bytes, Error> {
-        let line = self.response_channel.subscribe().recv().await?;
-        Ok(line)
-    }
-
-    /// Obtain a broadcast receiver returning all lines received by the printer
-    pub fn subscribe_lines(&self) -> PrinterLines {
-        self.response_channel.subscribe()
-    }
-
-    /// Obtain a raw bytes sender to send custom messages to the printer e.g. with some custom serializer
-    pub fn sender(&self) -> ChildPrinterSender {
-        ChildPrinterSender {
-            sender: self.sender.clone(),
-            serializer: Default::default(),
-            response_channel_handle: &self.response_channel,
-            global_sequence: &self.global_sequence,
-        }
+    /// Obtain a socket to talk to printer
+    pub fn socket(&self) -> Socket {
+        self.socket.clone()
     }
 }
 
-impl PrinterSender for Printer {
-    fn get_sender(&self) -> &mpsc::Sender<Bytes> {
-        &self.sender
-    }
+impl Deref for Printer {
+    type Target = Socket;
 
-    fn get_global_sequence(&self) -> &Au32 {
-        &self.global_sequence
+    fn deref(&self) -> &Self::Target {
+        &self.socket
     }
+}
 
-    fn get_serializer(&self) -> &Serializer {
-        &self.serializer
-    }
-
-    fn get_mut_serializer(&mut self) -> &mut Serializer {
-        &mut self.serializer
-    }
-
-    fn get_response_channel(&self) -> &broadcast::Sender<Bytes> {
-        &self.response_channel
+impl DerefMut for Printer {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.socket
     }
 }
