@@ -1,13 +1,14 @@
 mod commands;
 mod logging;
 
-use std::{borrow::Cow, collections::HashMap, fmt::Display};
+use std::{borrow::Cow, collections::HashMap, fmt::Display, str::FromStr};
 
 use commands::{auto_connect, help, version};
 use futures_util::AsyncWriteExt;
 use rustyline_async::{Readline, ReadlineEvent, SharedWriter};
 use tokio::io::{AsyncReadExt, AsyncWriteExt as TokioAsyncWrite};
 use tokio_serial::SerialPortBuilderExt;
+use tracing::level_filters::LevelFilter;
 use winnow::Parser;
 
 use print3rs_core::{Error as PrinterError, Printer};
@@ -287,8 +288,9 @@ async fn handle_command(
                 writer.write_all(e.to_string().as_bytes()).await?;
             }
         },
-        Clear => (), // needs external handling
-        Quit => (),  // needs external handling
+        Debugging(_) => (), // handled externally
+        Clear => (),        // needs external handling
+        Quit => (),         // needs external handling
     };
     Ok(())
 }
@@ -297,16 +299,23 @@ async fn handle_command(
 async fn main() -> eyre::Result<()> {
     let mut status = Status::Disconnected;
     let (mut readline, mut writer) = Readline::new(prompt_string(status))?;
+
     let mut printer = Printer::new_disconnected();
     let mut printer_reader = None;
     let mut disconnect_notify = None;
 
     let mut background_tasks = HashMap::new();
-
     commands::version(&mut writer).await;
     writer
         .write_all(b"type `:help` for a list of commands\n")
         .await?;
+
+    let log_writer = writer.clone();
+    let log_subscriber = tracing_subscriber::FmtSubscriber::builder()
+        .with_writer(move || log_writer.clone())
+        .with_max_level(LevelFilter::OFF)
+        .finish();
+    tracing::subscriber::set_global_default(log_subscriber)?;
 
     loop {
         tokio::select! { Ok(ReadlineEvent::Line(line)) = readline.readline() => {
