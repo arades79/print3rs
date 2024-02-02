@@ -7,7 +7,7 @@ edition = "2021"
 
 [dependencies]
 eyre = "0.6.11"
-rustyline-async = {git = "https://github.com/arades79/rustyline-async", branch = "feature/adjustable-prompt"}
+rustyline-async = {git = "https://github.com/arades79/rustyline-async", branch = "testing"}
 tokio = { version = "1.35.1", features = ["rt", "macros", "io-util", "time", "fs"] }
 winnow = "0.5.35"
 print3rs-core ={ path = "../print3rs-core"}
