@@ -20,22 +20,23 @@ async fn check_port(port: SerialPortInfo) -> Option<Printer> {
         .open_native_async()
         .ok()?;
     printer_port.write_data_terminal_ready(true).ok()?;
-    let printer = Printer::new(printer_port);
-    let mut reader = printer.subscribe_lines().ok()?;
+    let mut printer = Printer::new(printer_port);
+
+    printer.send_raw(b"M115\n").await.ok()?;
     let look_for_ok = tokio::spawn(async move {
-        while let Ok(line) = reader.recv().await {
+        while let Ok(line) = printer.read_next_line().await {
             let sline = String::from_utf8_lossy(&line);
             if sline.to_ascii_lowercase().contains("ok") {
-                return;
+                return Some(printer);
             }
         }
+        None
     });
-    printer.send_raw(b"M115\n").await.ok()?;
+
     timeout(Duration::from_secs(10), look_for_ok)
         .await
         .ok()?
-        .ok()?;
-    Some(printer)
+        .ok()?
 }
 
 pub async fn auto_connect() -> Option<Printer> {

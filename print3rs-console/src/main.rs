@@ -17,7 +17,7 @@ fn connect_printer(
     writer: &SharedWriter,
     disconnect_notify: &mut Option<tokio::sync::oneshot::Receiver<()>>,
 ) -> Result<tokio::task::JoinHandle<()>, PrinterError> {
-    let mut printer_lines = printer.subscribe_lines()?;
+    let mut printer_lines = printer.subscribe_lines();
     let mut print_line_writer = writer.clone();
     let abort_handle = printer.remote_disconnect();
     let (disconnecttx, disconnectrx) = tokio::sync::oneshot::channel();
@@ -71,7 +71,7 @@ async fn start_logging(
         .await?;
 
     let mut parser = logging::parsing::make_parser(pattern);
-    let mut log_printer_reader = printer.subscribe_lines()?;
+    let mut log_printer_reader = printer.subscribe_lines();
     let log_task_handle = tokio::spawn(async move {
         while let Ok(log_line) = log_printer_reader.recv().await {
             if let Ok(parsed) = parser.parse(&log_line) {
@@ -95,7 +95,7 @@ async fn start_repeat(
 ) -> tokio::task::JoinHandle<eyre::Result<()>> {
     let gcodes: Vec<String> = gcodes.into_iter().map(|s| s.into_owned()).collect();
     let mut socket = printer.socket();
-    
+
     tokio::spawn(async move {
         for ref line in gcodes.into_iter().cycle() {
             socket.send(line).await?.await?;
@@ -135,12 +135,14 @@ fn disconnect(
     status: &mut Status,
 ) {
     printer.disconnect();
-    if let Some(handle) = printer_reader.take() { handle.abort() }
+    if let Some(handle) = printer_reader.take() {
+        handle.abort()
+    }
     background_tasks.clear();
     *status = Status::Disconnected;
 }
 
-async fn not_connected(writer: &mut SharedWriter) -> Result<(), rustyline_async::ReadlineError>{
+async fn not_connected(writer: &mut SharedWriter) -> Result<(), rustyline_async::ReadlineError> {
     const ERR_NO_PRINTER: &[u8] = b"Printer not connected! Use ':help' for help connecting.\n";
     writer.write_all(ERR_NO_PRINTER).await?;
     Ok(())
@@ -165,10 +167,10 @@ async fn handle_command(
                 for line in gcodes {
                     match printer.send_unsequenced(line).await {
                         Ok(_) => (),
-                        Err(PrinterError::Disconnected) => {
+                        Err(e) => {
+                            tracing::error!("{e}");
                             disconnect(printer, printer_reader, background_tasks, status)
                         }
-                        Err(e) => tracing::error!("{e}"),
                     };
                 }
             }
@@ -330,7 +332,7 @@ async fn main() -> eyre::Result<()> {
                 }
                 readline.add_history_entry(line);
             },
-            Ok(_) = disconnect_notify.take().unwrap_or_else(|| {let (_tx, rx) = tokio::sync::oneshot::channel(); rx}), if disconnect_notify.is_some() => {
+            Ok(_) = &mut disconnect_notify.take().unwrap_or_else(|| {let (_tx, rx) = tokio::sync::oneshot::channel(); rx}), if disconnect_notify.is_some() => {
                 disconnect(&mut printer, &mut printer_reader, &mut background_tasks, &mut status);
             },
             else => {readline.flush()?; return Ok(());}
