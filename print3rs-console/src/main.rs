@@ -1,7 +1,7 @@
 mod commands;
 mod logging;
 
-use std::{borrow::Cow, collections::HashMap, fs::read};
+use std::{borrow::Cow, collections::HashMap};
 
 use commands::{auto_connect, help, version};
 use eyre::OptionExt;
@@ -11,7 +11,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt as TokioAsyncWrite};
 use tokio_serial::SerialPortBuilderExt;
 use winnow::Parser;
 
-use print3rs_core::{LineStream, Printer};
+use print3rs_core::Printer;
 
 fn connect_printer(
     printer: &Printer,
