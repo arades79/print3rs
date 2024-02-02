@@ -13,12 +13,14 @@ use winnow::Parser;
 
 use print3rs_core::{LineStream, Printer};
 
-fn connect_printer(printer: &Printer, writer: &SharedWriter) -> tokio::task::JoinHandle<()> {
-    let mut printer_lines = printer.subscribe_lines();
+fn connect_printer(
+    printer: &Printer,
+    writer: &SharedWriter,
+) -> eyre::Result<tokio::task::JoinHandle<()>> {
+    let mut printer_lines = printer.subscribe_lines()?;
     let mut print_line_writer = writer.clone();
     let abort_handle = printer.remote_disconnect();
-    tokio::spawn(async move {});
-    tokio::task::spawn(async move {
+    let background_comms = tokio::task::spawn(async move {
         while let Ok(line) = printer_lines.recv().await {
             match print_line_writer.write_all(&line).await {
                 Ok(_) => continue,
@@ -26,7 +28,8 @@ fn connect_printer(printer: &Printer, writer: &SharedWriter) -> tokio::task::Joi
             }
         }
         abort_handle.abort();
-    })
+    });
+    Ok(background_comms)
 }
 
 const ERR_NO_PRINTER: &str = "Printer not connected!\n";
@@ -70,7 +73,7 @@ async fn start_logging(
         .await?;
 
     let mut parser = logging::parsing::make_parser(pattern);
-    let mut log_printer_reader = printer.subscribe_lines();
+    let mut log_printer_reader = printer.subscribe_lines()?;
     let log_task_handle = tokio::spawn(async move {
         while let Ok(log_line) = log_printer_reader.recv().await {
             if let Ok(parsed) = parser.parse(&log_line) {
@@ -178,13 +181,13 @@ async fn main() -> eyre::Result<()> {
                 };
             }
             Connect(path, baud) => {
-                readline.update_prompt(PROMPT_CONNECTED.to_string())?;
-
                 printer = match tokio_serial::new(path, baud.unwrap_or(115200)).open_native_async()
                 {
                     Ok(serial) => {
                         readline.update_prompt(PROMPT_CONNECTED.to_string())?;
-                        Some(Printer::new(serial))
+                        let printer = Printer::new(serial);
+                        connect_printer(&printer, &writer)?;
+                        Some(printer)
                     }
                     Err(e) => {
                         writer
@@ -199,7 +202,7 @@ async fn main() -> eyre::Result<()> {
                 printer = auto_connect().await;
                 let msg = match printer {
                     Some(ref printer) => {
-                        printer_reader = Some(connect_printer(printer, &writer));
+                        printer_reader = Some(connect_printer(printer, &writer)?);
                         readline.update_prompt(PROMPT_CONNECTED.to_string())?;
                         "Found printer!\n".as_bytes()
                     }
@@ -209,8 +212,8 @@ async fn main() -> eyre::Result<()> {
                 readline.flush()?;
             }
             Disconnect => {
-                printer.take();
-                printer_reader.take();
+                printer.take().map(|printer| printer.disconnect());
+                printer_reader.take().map(|handle| handle.abort());
                 readline.update_prompt(PROMPT_DISCONNECTED.to_string())?;
             }
             Help(sub) => help(&mut writer, sub).await,
