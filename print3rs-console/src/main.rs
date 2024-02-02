@@ -15,13 +15,13 @@ use print3rs_core::{Error as PrinterError, Printer};
 fn connect_printer(
     printer: &Printer,
     writer: &SharedWriter,
-    disconnect_notify: &mut tokio::sync::oneshot::Receiver<()>,
+    disconnect_notify: &mut Option<tokio::sync::oneshot::Receiver<()>>,
 ) -> Result<tokio::task::JoinHandle<()>, PrinterError> {
     let mut printer_lines = printer.subscribe_lines()?;
     let mut print_line_writer = writer.clone();
     let abort_handle = printer.remote_disconnect();
     let (disconnecttx, disconnectrx) = tokio::sync::oneshot::channel();
-    *disconnect_notify = disconnectrx;
+    *disconnect_notify = Some(disconnectrx);
     let background_comms = tokio::task::spawn(async move {
         while let Ok(line) = printer_lines.recv().await {
             match print_line_writer.write_all(&line).await {
@@ -149,7 +149,7 @@ async fn handle_command(
     status: &mut Status,
     background_tasks: &mut HashMap<String, BackgroundTask>,
     printer_reader: &mut Option<tokio::task::JoinHandle<()>>,
-    disconnect_notify: &mut tokio::sync::oneshot::Receiver<()>,
+    disconnect_notify: &mut Option<tokio::sync::oneshot::Receiver<()>>,
 ) -> eyre::Result<()> {
     use commands::Command::*;
     match command {
@@ -285,11 +285,11 @@ async fn handle_command(
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> eyre::Result<()> {
-    let status = Status::Disconnected;
+    let mut status = Status::Disconnected;
     let (mut readline, mut writer) = Readline::new(prompt_string(status))?;
     let mut printer = Printer::new_disconnected();
     let mut printer_reader = None;
-    let (_, mut disconnect_notify) = tokio::sync::oneshot::channel::<()>();
+    let mut disconnect_notify = None;
 
     let mut background_tasks = HashMap::new();
 
@@ -308,8 +308,8 @@ async fn main() -> eyre::Result<()> {
                     }
                 };
                 match command {
-                    Clear => readline.clear()?,
-                    Quit => break,
+                    commands::Command::Clear => readline.clear()?,
+                    commands::Command::Quit => {readline.flush()?; return Ok(());},
                     other => {
                         handle_command(
                             other,
@@ -325,12 +325,10 @@ async fn main() -> eyre::Result<()> {
                 }
                 readline.add_history_entry(line);
             },
-            disconnected = disconnect_notify => {
+            _ = disconnect_notify.take().unwrap(), if disconnect_notify.is_some() => {
                 disconnect(&mut printer, &mut printer_reader, &mut background_tasks, &mut status);
             }
         }
         readline.update_prompt(prompt_string(status))?;
     }
-    readline.flush()?;
-    Ok(())
 }
