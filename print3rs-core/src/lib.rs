@@ -191,9 +191,27 @@ impl Printer {
         }
     }
 
+    /// Recreates a disconnected printer in place
+    /// All previous handles will be invalid and need recreation
+    pub fn connect(&mut self, port: Serial) {
+        let new_printer = Printer::new(port);
+        let _ = core::mem::replace(self, new_printer);
+
+    }
+
     /// Obtain a socket to talk to printer
     pub fn socket(&self) -> Socket {
         self.socket.clone()
+    }
+
+    /// Disconnect the printer and shutdown background communication
+    pub fn disconnect(&self) {
+        self.com_task.abort();
+    }
+
+    /// Get a handle to disconnect the printer from some background task
+    pub fn remote_disconnect(&self) -> tokio::task::AbortHandle {
+        self.com_task.abort_handle()
     }
 }
 
