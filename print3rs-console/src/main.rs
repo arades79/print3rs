@@ -325,7 +325,7 @@ async fn main() -> eyre::Result<()> {
                 }
                 readline.add_history_entry(line);
             },
-            _ = disconnect_notify.take().unwrap(), if disconnect_notify.is_some() => {
+            Ok(_) = disconnect_notify.take().unwrap_or_else(|| {let (_tx, rx) = tokio::sync::oneshot::channel(); rx}), if disconnect_notify.is_some() => {
                 disconnect(&mut printer, &mut printer_reader, &mut background_tasks, &mut status);
             }
         }
