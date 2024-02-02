@@ -75,14 +75,17 @@ async fn start_logging(
     let log_task_handle = tokio::spawn(async move {
         while let Ok(log_line) = log_printer_reader.recv().await {
             if let Ok(parsed) = parser.parse(&log_line) {
-                let mut record_bytes = Vec::new();
+                let mut record_bytes = String::new();
                 for val in parsed {
-                    record_bytes.extend_from_slice(ryu::Buffer::new().format(val).as_bytes());
-                    record_bytes.push(b',');
+                    record_bytes.push_str(&val.to_string());
+                    record_bytes.push(',');
                 }
                 record_bytes.pop(); // remove trailing ','
-                record_bytes.push(b'\n');
-                log_file.write_all(&record_bytes).await.unwrap_or_default();
+                record_bytes.push('\n');
+                log_file
+                    .write_all(record_bytes.as_bytes())
+                    .await
+                    .unwrap_or_default();
             }
         }
     });
@@ -337,6 +340,6 @@ async fn main() -> eyre::Result<()> {
             },
             else => {readline.flush()?; return Ok(());}
         }
-        readline.update_prompt(prompt_string(status))?;
+        readline.update_prompt(&prompt_string(status))?;
     }
 }
