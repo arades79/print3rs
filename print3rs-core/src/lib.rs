@@ -66,7 +66,7 @@ impl Socket {
     ) -> Result<tokio::task::JoinHandle<Response>, Error> {
         let send_slot = self.sender.reserve().await?;
         let (sequence, bytes) = self.serializer.serialize(gcode);
-        let sequenced_ok_watch = self.responses.subscribe();
+        let sequenced_ok_watch = self.subscribe_lines()?;
         send_slot.send(bytes.freeze());
         let wait_for_response =
             tokio::task::spawn(search_for_sequence(sequence, sequenced_ok_watch));
