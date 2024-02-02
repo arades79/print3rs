@@ -332,7 +332,8 @@ async fn main() -> eyre::Result<()> {
             },
             Ok(_) = disconnect_notify.take().unwrap_or_else(|| {let (_tx, rx) = tokio::sync::oneshot::channel(); rx}), if disconnect_notify.is_some() => {
                 disconnect(&mut printer, &mut printer_reader, &mut background_tasks, &mut status);
-            }
+            },
+            else => {readline.flush()?; return Ok(());}
         }
         readline.update_prompt(prompt_string(status))?;
     }
