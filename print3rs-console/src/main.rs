@@ -36,15 +36,16 @@ const ERR_NO_PRINTER: &str = "Printer not connected!\n";
 async fn start_print_file(
     filename: &str,
     printer: &Printer,
-) -> Result<tokio::task::JoinHandle<()>, PrinterError> {
+) -> Result<tokio::task::JoinHandle<eyre::Result<()>>, PrinterError> {
     let mut file = tokio::fs::File::open(filename).await?;
     let mut file_contents = String::new();
     file.read_to_string(&mut file_contents).await?;
     let mut socket = printer.socket();
     let task = tokio::spawn(async move {
         for line in file_contents.lines() {
-            socket.send(line).await.unwrap().await.unwrap();
+            socket.send(line).await?.await?;
         }
+        Ok(())
     });
     Ok(task)
 }
@@ -89,20 +90,14 @@ async fn start_logging(
 async fn start_repeat(
     gcodes: Vec<Cow<'_, str>>,
     printer: &Printer,
-) -> tokio::task::JoinHandle<()> {
+) -> tokio::task::JoinHandle<eyre::Result<()>> {
     let gcodes: Vec<String> = gcodes.into_iter().map(|s| s.into_owned()).collect();
     let mut socket = printer.socket();
     let repeat_task = tokio::spawn(async move {
         for ref line in gcodes.into_iter().cycle() {
-            let sequence_watch = match socket.send(line).await {
-                Ok(handle) => handle,
-                Err(_) => break,
-            };
-            match sequence_watch.await {
-                Ok(_) => (),
-                Err(_) => break,
-            };
+            socket.send(line).await?.await?;
         }
+        Ok(())
     });
     repeat_task
 }
@@ -166,9 +161,7 @@ async fn main() -> eyre::Result<()> {
                     for line in gcodes {
                         match printer.send_unsequenced(line).await {
                             Ok(_) => (),
-                            Err(PrinterError::Disconnected) => {
-                                status = Status::Disconnected
-                            }
+                            Err(PrinterError::Disconnected) => status = Status::Disconnected,
                             Err(e) => tracing::error!("{e}"),
                         };
                     }
@@ -189,20 +182,15 @@ async fn main() -> eyre::Result<()> {
                 }
             },
             Repeat(name, gcodes) => {
-                match start_repeat(gcodes, &printer).await {
-                    Ok(repeat_task) => {
-                        background_tasks.insert(
-                            name.to_owned(),
-                            BackgroundTask {
-                                description: "repeat",
-                                abort_handle: repeat_task.abort_handle(),
-                            },
-                        );
-                    }
-                    Err(e) => {
-                        writer.write_all(e.to_string().as_bytes()).await?;
-                    }
-                };
+                let repeat_task = start_repeat(gcodes, &printer).await;
+
+                background_tasks.insert(
+                    name.to_owned(),
+                    BackgroundTask {
+                        description: "repeat",
+                        abort_handle: repeat_task.abort_handle(),
+                    },
+                );
             }
             Connect(path, baud) => {
                 match tokio_serial::new(path, baud.unwrap_or(115200)).open_native_async() {
