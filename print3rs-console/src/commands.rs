@@ -66,12 +66,10 @@ pub async fn version(writer: &mut rustyline_async::SharedWriter) {
 }
 
 static FULL_HELP: &[u8] = b"    
-commands can be explicitly invoked with ':', e.g. ':log timelogger millis:{{millis}}'
-if ':' is not used, an unrecognized command is uppercased and sent to the connected printer.
+Anything entered not matching one of the following commands is uppercased and sent to
+the printer for it to interpret.
 
-example: `> g28` will send `G28` to the printer. 
-
-Some commands, including Gcodes, cannot be ran until a printer is connected.
+Some commands cannot be ran until a printer is connected.
 Some printers support 'autoconnect', otherwise you will need to connect using the serial port name.
 
 Multiple Gcodes can be sent on the same line by separating with ';'.
@@ -79,30 +77,34 @@ Multiple Gcodes can be sent on the same line by separating with ';'.
 Arguments with ? are optional.
 
 Available commands:
-help    <command?>       display this message or details for specified command
-version                  display version
-print   <file>           send gcodes from file to printer
-log     <name> <pattern> begin logging parsed output from printer
-repeat  <name> <gcodes>  run the given gcodes in a loop until stop
-stop    <name>           stop an active print, log, or repeat
-send    <gcodes>         explicitly send commands (split by ;) to printer exactly as typed
-connect <path> <baud?>   connect to a specified serial device at baud (default: 115200)
-autoconnect              attempt to find and connect to a printer
-disconnect               disconnect from printer
-quit                     exit program
+help         <command?>       display this message or details for specified command
+version                       display version
+clear                         clear all text on the screen
+printerinfo                   display any information found about the connected printer
+print        <file>           send gcodes from file to printer
+log          <name> <pattern> begin logging parsed output from printer
+repeat       <name> <gcodes>  run the given gcodes in a loop until stop
+stop         <name>           stop an active print, log, or repeat
+send         <gcodes>         explicitly send commands (split by ;) to printer exactly as typed
+connect      <path> <baud?>   connect to a specified serial device at baud (default: 115200)
+autoconnect                   attempt to find and connect to a printer
+disconnect                    disconnect from printer
+debugging    <level>          change the amount of debugging output (default: off)
+quit                          exit program
 \n";
 
 pub async fn help(writer: &mut rustyline_async::SharedWriter, command: &str) {
-    let command = command.trim().strip_prefix(":").unwrap_or(command.trim());
+    let command = command.trim().strip_prefix(':').unwrap_or(command.trim());
     let msg: &[u8] = match command {
-        "send" => b"send    <gcodes>         explicitly send commands (split by ;) to printer exactly as typed\n",
-        "print" => b"print\n",
-        "log" => b"log\n",
-        "repeat" => b"repeat\n",
-        "stop" => b"stop\n",
-        "connect" => b"connect\n",
-        "autoconnect" => b"autoconnect\n",
-        "disconnect" => b"disconnect\n",
+        "send" => b"send: explicitly send one or more commands (separated by gcode comment character `;`) commands to the printer, no uppercasing or additional parsing is performed. This can be used to send commands to the printer that would otherwise be detected as a console command.\n",
+        "print" => b"print: execute every line of G-code sequentially from the given file. The print job is added as a task which runs in the background with the filename as the task name. Other commands can be sent while a print is running, and a print can be stopped at any time with `stop`\n",
+        "log" => b"log: begin logging the specified pattern from the printer into a csv with the `name` given. This operation runs in the background and is added as a task which can be stopped with `stop`. The pattern given will be used to parse the logs, with values wrapped in `{}` being given a column of whatever is between the `{}`, and pulling a number in its place. If your pattern needs to include a literal `{` or `}`, double them up like `{{` or `}}` to have the parser read it as just a `{` or `}` in the output.\n",
+        "repeat" => b"repeat: repeat the given Gcodes (separated by gcode comment character `;`) in a loop until stopped. \n",
+        "stop" => b"stop: stops a task running in the background. All background tasks are required to have a name, thus this command can be used to stop them. Tasks can also stop themselves if they fail or can complete, after which running this will do nothing.\n",
+        "connect" => b"connect: Manually connect to a printer by specifying it's path and optionally its baudrate. On windows this looks like `connect COM3 115200`, on linux more like `connect /dev/tty/ACM0 250000`. This does not test if the printer is capable of responding to messages, it will only open the port.\n",
+        "autoconnect" => b"autoconnect: On some supported printer firmwares, this will automatically detect a connected printer and verify that it's capable of receiving and responding to commands. This is done with an `M115` command sent to the device, and waiting at most 5 seconds for an `ok` response. If your printer does not support this command, this will not work and you will need manual connection.\n",
+        "disconnect" => b"disconnect: disconnect from the currently connected printer. All active tasks will be stopped\n",
+        "debugging" => b"debugging: control the amount of extra information printed to the screen. By default this is `off`, meaning only strictly necessary messages, sent commands, and printer responses are shown in the console. The levels supported are `off`, `error`, `warn`, `info`, `debug`, `trace`, in increasing levels of verbosity. This is mostly for debugging issues with this console, but could be used to get extra information about when a printer is crashing.\n",
         _ => FULL_HELP,
     };
     writer.write_all(msg).await.unwrap_or_default();
@@ -122,6 +124,7 @@ pub enum Command<'a> {
     AutoConnect,
     Disconnect,
     Help(&'a str),
+    Debugging(&'a str),
     Version,
     Clear,
     Quit,
@@ -156,6 +159,7 @@ fn inner_command<'a>(input: &mut &'a str) -> PResult<Command<'a>> {
         "connect" => (preceded(space0, take_till(1.., [' '])), preceded(space0,opt(dec_uint))).map(|(path, baud)| Command::Connect(path, baud)),
         "send" => preceded(space0, parse_gcodes).map(Command::Gcodes),
         "clear" => empty.map(|_| Command::Clear),
+        "debugging" => preceded(space0, rest).map(Command::Debugging),
         "quit" | "exit" => empty.map(|_| Command::Quit),
         _ => empty.map(|_| Command::Unrecognized)
     })
