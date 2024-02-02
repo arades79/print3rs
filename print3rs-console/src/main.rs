@@ -35,8 +35,6 @@ fn connect_printer(
     Ok(background_comms)
 }
 
-const ERR_NO_PRINTER: &str = "Printer not connected!\n";
-
 async fn start_print_file(
     filename: &str,
     printer: &Printer,
@@ -97,13 +95,13 @@ async fn start_repeat(
 ) -> tokio::task::JoinHandle<eyre::Result<()>> {
     let gcodes: Vec<String> = gcodes.into_iter().map(|s| s.into_owned()).collect();
     let mut socket = printer.socket();
-    let repeat_task = tokio::spawn(async move {
+    
+    tokio::spawn(async move {
         for ref line in gcodes.into_iter().cycle() {
             socket.send(line).await?.await?;
         }
         Ok(())
-    });
-    repeat_task
+    })
 }
 
 struct BackgroundTask {
@@ -137,15 +135,21 @@ fn disconnect(
     status: &mut Status,
 ) {
     printer.disconnect();
-    printer_reader.take().map(|handle| handle.abort());
+    if let Some(handle) = printer_reader.take() { handle.abort() }
     background_tasks.clear();
     *status = Status::Disconnected;
+}
+
+async fn not_connected(writer: &mut SharedWriter) -> Result<(), rustyline_async::ReadlineError>{
+    const ERR_NO_PRINTER: &[u8] = b"Printer not connected! Use ':help' for help connecting.\n";
+    writer.write_all(ERR_NO_PRINTER).await?;
+    Ok(())
 }
 
 async fn handle_command(
     command: commands::Command<'_>,
     printer: &mut Printer,
-    mut writer: &mut SharedWriter,
+    writer: &mut SharedWriter,
     status: &mut Status,
     background_tasks: &mut HashMap<String, BackgroundTask>,
     printer_reader: &mut Option<tokio::task::JoinHandle<()>>,
@@ -155,11 +159,8 @@ async fn handle_command(
     match command {
         Gcodes(gcodes) => {
             if *status == Status::Disconnected {
-                writer
-                    .write_all(
-                        "No printer connected! Use ':help' for help connecting.\n".as_bytes(),
-                    )
-                    .await?
+                not_connected(writer).await?;
+                return Ok(());
             } else {
                 for line in gcodes {
                     match printer.send_unsequenced(line).await {
@@ -172,7 +173,7 @@ async fn handle_command(
                 }
             }
         }
-        Log(name, pattern) => match start_logging(name, pattern, &printer).await {
+        Log(name, pattern) => match start_logging(name, pattern, printer).await {
             Ok(log_task_handle) => {
                 background_tasks.insert(
                     name.to_owned(),
@@ -187,7 +188,11 @@ async fn handle_command(
             }
         },
         Repeat(name, gcodes) => {
-            let repeat_task = start_repeat(gcodes, &printer).await;
+            if *status == Status::Disconnected {
+                not_connected(writer).await?;
+                return Ok(());
+            }
+            let repeat_task = start_repeat(gcodes, printer).await;
 
             background_tasks.insert(
                 name.to_owned(),
@@ -227,8 +232,8 @@ async fn handle_command(
         Disconnect => {
             disconnect(printer, printer_reader, background_tasks, status);
         }
-        Help(sub) => help(&mut writer, sub).await,
-        Version => version(&mut writer).await,
+        Help(sub) => help(writer, sub).await,
+        Version => version(writer).await,
         Unrecognized => {
             writer
                 .write_all(
@@ -263,7 +268,7 @@ async fn handle_command(
                     .await?;
             }
         }
-        Print(filename) => match start_print_file(filename, &printer).await {
+        Print(filename) => match start_print_file(filename, printer).await {
             Ok(print_task) => {
                 background_tasks.insert(
                     filename.to_owned(),
