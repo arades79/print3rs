@@ -1,7 +1,7 @@
 mod commands;
 mod logging;
 
-use std::{borrow::Cow, collections::HashMap};
+use std::{borrow::Cow, collections::HashMap, fs::read};
 
 use commands::{auto_connect, help, version};
 use eyre::OptionExt;
@@ -98,6 +98,11 @@ async fn start_repeat(
     Ok(repeat_task)
 }
 
+struct BackgroundTask {
+    description: &'static str,
+    abort_handle: tokio::task::AbortHandle,
+}
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> eyre::Result<()> {
     static PROMPT_DISCONNECTED: &str = "[disconnected]> ";
@@ -139,7 +144,13 @@ async fn main() -> eyre::Result<()> {
             }
             Log(name, pattern) => match start_logging(name, pattern, &printer).await {
                 Ok(log_task_handle) => {
-                    background_tasks.insert(name.to_owned(), log_task_handle);
+                    background_tasks.insert(
+                        name.to_owned(),
+                        BackgroundTask {
+                            description: "log",
+                            abort_handle: log_task_handle.abort_handle(),
+                        },
+                    );
                 }
                 Err(e) => {
                     writer.write_all(e.to_string().as_bytes()).await?;
@@ -148,7 +159,13 @@ async fn main() -> eyre::Result<()> {
             Repeat(name, gcodes) => {
                 match start_repeat(gcodes, &printer).await {
                     Ok(repeat_task) => {
-                        background_tasks.insert(name.to_owned(), repeat_task);
+                        background_tasks.insert(
+                            name.to_owned(),
+                            BackgroundTask {
+                                description: "repeat",
+                                abort_handle: repeat_task.abort_handle(),
+                            },
+                        );
                     }
                     Err(e) => {
                         writer.write_all(e.to_string().as_bytes()).await?;
@@ -156,6 +173,8 @@ async fn main() -> eyre::Result<()> {
                 };
             }
             Connect(path, baud) => {
+                readline.update_prompt(PROMPT_CONNECTED.to_string())?;
+
                 printer = match tokio_serial::new(path, baud.unwrap_or(115200)).open_native_async()
                 {
                     Ok(serial) => {
@@ -169,7 +188,6 @@ async fn main() -> eyre::Result<()> {
                         None
                     }
                 };
-                readline.update_prompt(PROMPT_CONNECTED.to_string())?;
             }
             AutoConnect => {
                 writer.write_all(b"Connecting...\n").await?;
@@ -184,17 +202,17 @@ async fn main() -> eyre::Result<()> {
                     None => "Printer not found.\n".as_bytes(),
                 };
                 writer.write_all(msg).await?;
+                readline.flush()?;
             }
             Disconnect => {
                 printer.take();
                 printer_reader.take();
                 readline.update_prompt(PROMPT_DISCONNECTED.to_string())?;
-                readline.flush()?;
             }
             Help(sub) => help(&mut writer, sub).await,
             Version => version(&mut writer).await,
             Clear => {
-                writer.write_all(b"Press 'Ctrl+L' to clear\n").await?;
+                readline.clear()?;
             }
             Unrecognized => {
                 writer
@@ -203,9 +221,24 @@ async fn main() -> eyre::Result<()> {
                     )
                     .await?;
             }
+            Tasks => {
+                for (
+                    name,
+                    BackgroundTask {
+                        description,
+                        abort_handle: _,
+                    },
+                ) in background_tasks.iter()
+                {
+                    // TODO: add task strings into the value
+                    writer
+                        .write_all(format!("{name}\t{description}\n").as_bytes())
+                        .await?;
+                }
+            }
             Stop(label) => {
                 if let Some(task_handle) = background_tasks.remove(label) {
-                    task_handle.abort()
+                    task_handle.abort_handle.abort();
                 } else {
                     writer
                         .write_all(format!("No task named {label} running\n").as_bytes())
@@ -214,7 +247,7 @@ async fn main() -> eyre::Result<()> {
             }
             Print(filename) => match start_print_file(filename, &printer).await {
                 Ok(print_task) => {
-                    background_tasks.insert(filename.to_owned(), print_task);
+                    background_tasks.insert(filename.to_owned(), BackgroundTask {description: "print", abort_handle: print_task.abort_handle()});
                 }
                 Err(e) => {
                     writer.write_all(e.to_string().as_bytes()).await?;
@@ -222,7 +255,6 @@ async fn main() -> eyre::Result<()> {
             },
             Quit => break,
         };
-
         readline.add_history_entry(line);
     }
     readline.flush()?;
