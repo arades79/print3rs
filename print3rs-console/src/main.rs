@@ -13,14 +13,19 @@ use winnow::Parser;
 
 use print3rs_core::{LineStream, Printer};
 
-fn connect_printer(
-    mut printer_lines: LineStream,
-    mut print_line_writer: SharedWriter,
-) -> tokio::task::JoinHandle<()> {
+fn connect_printer(printer: &Printer, writer: &SharedWriter) -> tokio::task::JoinHandle<()> {
+    let mut printer_lines = printer.subscribe_lines();
+    let mut print_line_writer = writer.clone();
+    let abort_handle = printer.remote_disconnect();
+    tokio::spawn(async move {});
     tokio::task::spawn(async move {
         while let Ok(line) = printer_lines.recv().await {
-            print_line_writer.write_all(&line).await.unwrap_or_default();
+            match print_line_writer.write_all(&line).await {
+                Ok(_) => continue,
+                Err(_) => break,
+            }
         }
+        abort_handle.abort();
     })
 }
 
@@ -193,9 +198,8 @@ async fn main() -> eyre::Result<()> {
                 writer.write_all(b"Connecting...\n").await?;
                 printer = auto_connect().await;
                 let msg = match printer {
-                    Some(ref mut printer) => {
-                        printer_reader =
-                            Some(connect_printer(printer.subscribe_lines(), writer.clone()));
+                    Some(ref printer) => {
+                        printer_reader = Some(connect_printer(printer, &writer));
                         readline.update_prompt(PROMPT_CONNECTED.to_string())?;
                         "Found printer!\n".as_bytes()
                     }
@@ -247,7 +251,13 @@ async fn main() -> eyre::Result<()> {
             }
             Print(filename) => match start_print_file(filename, &printer).await {
                 Ok(print_task) => {
-                    background_tasks.insert(filename.to_owned(), BackgroundTask {description: "print", abort_handle: print_task.abort_handle()});
+                    background_tasks.insert(
+                        filename.to_owned(),
+                        BackgroundTask {
+                            description: "print",
+                            abort_handle: print_task.abort_handle(),
+                        },
+                    );
                 }
                 Err(e) => {
                     writer.write_all(e.to_string().as_bytes()).await?;

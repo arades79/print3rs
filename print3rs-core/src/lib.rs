@@ -1,6 +1,7 @@
 use std::{
     fmt::Debug,
     ops::{Deref, DerefMut},
+    sync::{Arc, Weak},
 };
 
 use serde::Serialize;
@@ -46,7 +47,7 @@ pub async fn search_for_sequence(sequence: i32, mut responses: LineStream) -> Re
 pub struct Socket {
     sender: mpsc::Sender<Bytes>,
     serializer: Serializer,
-    pub responses: broadcast::Sender<Bytes>,
+    pub responses: Weak<broadcast::Sender<Bytes>>,
 }
 
 impl Socket {
@@ -101,13 +102,14 @@ impl Socket {
     ///
     /// If all lines should be processed, use `subscribe_lines`
     pub async fn read_next_line(&self) -> Result<Bytes, Error> {
-        let line = self.responses.subscribe().recv().await?;
+        let line = self.subscribe_lines()?.recv().await?;
         Ok(line)
     }
 
     /// Obtain a broadcast receiver returning all lines received by the printer
-    pub fn subscribe_lines(&self) -> LineStream {
-        self.responses.subscribe()
+    pub fn subscribe_lines(&self) -> Result<LineStream, Error> {
+        let sender = self.responses.upgrade().ok_or(Error::Disconnected)?;
+        Ok(sender.subscribe())
     }
 }
 
@@ -148,7 +150,7 @@ pub enum Error {
 async fn printer_com_task(
     mut serial: Serial,
     mut gcoderx: mpsc::Receiver<Bytes>,
-    responsetx: broadcast::Sender<Bytes>,
+    responsetx: Arc<broadcast::Sender<Bytes>>,
 ) -> Result<(), Error> {
     let mut buf = BytesMut::with_capacity(1024);
     tracing::debug!("Started background printer communications");
@@ -178,8 +180,10 @@ impl Printer {
     #[tracing::instrument(level = "debug")]
     pub fn new(port: Serial) -> Self {
         let (sender, gcoderx) = mpsc::channel::<Bytes>(8);
-        let (responses, _) = broadcast::channel(64);
-        let com_task = tokio::task::spawn(printer_com_task(port, gcoderx, responses.clone()));
+        let (response_sender, _) = broadcast::channel(64);
+        let response_sender = Arc::new(response_sender);
+        let responses = Arc::downgrade(&response_sender);
+        let com_task = tokio::task::spawn(printer_com_task(port, gcoderx, response_sender));
         let serializer = Serializer::default();
         Self {
             socket: Socket {
@@ -196,7 +200,6 @@ impl Printer {
     pub fn connect(&mut self, port: Serial) {
         let new_printer = Printer::new(port);
         let _ = core::mem::replace(self, new_printer);
-
     }
 
     /// Obtain a socket to talk to printer
