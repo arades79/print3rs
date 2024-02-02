@@ -11,7 +11,7 @@ mod response;
 
 use response::response;
 pub use response::Response;
-use tokio_serial::SerialStream;
+use tokio_serial::{SerialPort, SerialStream};
 
 use gcode_serializer::Serializer;
 
@@ -43,11 +43,11 @@ pub async fn search_for_sequence(sequence: i32, mut responses: LineStream) -> Re
     Response::Ok
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Socket {
     sender: mpsc::Sender<Bytes>,
     serializer: Serializer,
-    pub responses: Weak<broadcast::Sender<Bytes>>,
+    pub responses: broadcast::Receiver<Bytes>,
 }
 
 impl Socket {
@@ -66,7 +66,7 @@ impl Socket {
     ) -> Result<tokio::task::JoinHandle<Response>, Error> {
         let send_slot = self.sender.reserve().await?;
         let (sequence, bytes) = self.serializer.serialize(gcode);
-        let sequenced_ok_watch = self.subscribe_lines()?;
+        let sequenced_ok_watch = self.subscribe_lines();
         send_slot.send(bytes.freeze());
         let wait_for_response =
             tokio::task::spawn(search_for_sequence(sequence, sequenced_ok_watch));
@@ -92,24 +92,24 @@ impl Socket {
         Ok(())
     }
 
-    /// Retrieve the next line to come in from the printer.
+    /// Read the next line from the printer
     ///
-    /// There is no buffering of lines for this method,
-    /// only a line which comes in after this call will be returned.
-    ///
-    /// Because of this, there's a reasonable chance of missing lines with this method,
-    /// it is also high overhead due to establishing a new channel each call.
-    ///
-    /// If all lines should be processed, use `subscribe_lines`
-    pub async fn read_next_line(&self) -> Result<Bytes, Error> {
-        let line = self.subscribe_lines()?.recv().await?;
-        Ok(line)
+    /// May not recieve all lines, if calls to this function are spaced
+    /// far apart, the buffer may overfill and the oldest messages will
+    /// be dropped. In this case the oldest available message is returned.
+    pub async fn read_next_line(&mut self) -> Result<Bytes, Error> {
+        loop {
+            match self.responses.recv().await {
+                Ok(line) => break Ok(line),
+                Err(broadcast::error::RecvError::Lagged(_)) => todo!(),
+                Err(e) => break Err(Error::from(e)),
+            }
+        }
     }
 
     /// Obtain a broadcast receiver returning all lines received by the printer
-    pub fn subscribe_lines(&self) -> Result<LineStream, Error> {
-        let sender = self.responses.upgrade().ok_or(Error::Disconnected)?;
-        Ok(sender.subscribe())
+    pub fn subscribe_lines(&self) -> LineStream {
+        self.responses.resubscribe()
     }
 }
 
@@ -150,17 +150,20 @@ pub enum Error {
 async fn printer_com_task(
     mut serial: Serial,
     mut gcoderx: mpsc::Receiver<Bytes>,
-    responsetx: Arc<broadcast::Sender<Bytes>>,
+    responsetx: broadcast::Sender<Bytes>,
 ) {
     let mut buf = BytesMut::with_capacity(1024);
     tracing::debug!("Started background printer communications");
     loop {
+        if serial.read_carrier_detect().is_err() {
+            break;
+        }
         tokio::select! {
             Some(line) = gcoderx.recv() => {
                 match serial.write_all(&line).await {
                     Ok(_) => (),
                     Err(_) => break,
-                }
+                };
                 match serial.flush().await {
                     Ok(_) => (),
                     Err(_) => break,
@@ -171,7 +174,10 @@ async fn printer_com_task(
                 while let Some(n) = buf.iter().position(|b| *b == b'\n') {
                     let line = buf.split_to(n + 1).freeze();
                     tracing::debug!("Received `{}` from printer", String::from_utf8_lossy(&line).trim());
-                    let _ = responsetx.send(line); // ignore errors and keep trying
+                    match responsetx.send(line) {
+                        Ok(_) => (),
+                        Err(_) => break,
+                    };
                 }
             },
             else => break,
@@ -186,9 +192,7 @@ impl Printer {
     #[tracing::instrument(level = "debug")]
     pub fn new(port: Serial) -> Self {
         let (sender, gcoderx) = mpsc::channel::<Bytes>(8);
-        let (response_sender, _) = broadcast::channel(64);
-        let response_sender = Arc::new(response_sender);
-        let responses = Arc::downgrade(&response_sender);
+        let (response_sender, responses) = broadcast::channel(64);
         let com_task = tokio::task::spawn(printer_com_task(port, gcoderx, response_sender));
         let serializer = Serializer::default();
         Self {
@@ -205,7 +209,7 @@ impl Printer {
     /// Most methods will return Err(Disconnected)
     pub fn new_disconnected() -> Self {
         let (sender, _) = mpsc::channel(1);
-        let responses = Weak::new();
+        let (_, responses) = broadcast::channel(1);
         let serializer = Serializer::default();
         let com_task = tokio::spawn(async {});
         Self {
@@ -227,7 +231,11 @@ impl Printer {
 
     /// Obtain a socket to talk to printer
     pub fn socket(&self) -> Socket {
-        self.socket.clone()
+        Socket {
+            sender: self.sender.clone(),
+            serializer: self.serializer.clone(),
+            responses: self.responses.resubscribe(),
+        }
     }
 
     /// Disconnect the printer and shutdown background communication
