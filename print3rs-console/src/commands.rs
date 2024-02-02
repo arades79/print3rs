@@ -20,8 +20,8 @@ async fn check_port(port: SerialPortInfo) -> Option<Printer> {
         .open_native_async()
         .ok()?;
     printer_port.write_data_terminal_ready(true).ok()?;
-    let mut printer = Printer::new(printer_port);
-    let mut reader = printer.subscribe_lines();
+    let printer = Printer::new(printer_port);
+    let mut reader = printer.subscribe_lines().ok()?;
     let look_for_ok = tokio::spawn(async move {
         while let Ok(line) = reader.recv().await {
             let sline = String::from_utf8_lossy(&line);
