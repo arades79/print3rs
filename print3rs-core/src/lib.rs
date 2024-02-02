@@ -116,7 +116,7 @@ impl Socket {
 /// Handle for asynchronous serial communication with a 3D printer
 pub struct Printer {
     socket: Socket,
-    com_task: tokio::task::JoinHandle<Result<(), Error>>,
+    com_task: tokio::task::JoinHandle<()>,
 }
 
 impl Drop for Printer {
@@ -151,14 +151,20 @@ async fn printer_com_task(
     mut serial: Serial,
     mut gcoderx: mpsc::Receiver<Bytes>,
     responsetx: Arc<broadcast::Sender<Bytes>>,
-) -> Result<(), Error> {
+) {
     let mut buf = BytesMut::with_capacity(1024);
     tracing::debug!("Started background printer communications");
     loop {
         tokio::select! {
             Some(line) = gcoderx.recv() => {
-                serial.write_all(&line).await?;
-                serial.flush().await?;
+                match serial.write_all(&line).await {
+                    Ok(_) => (),
+                    Err(_) => break,
+                }
+                match serial.flush().await {
+                    Ok(_) => (),
+                    Err(_) => break,
+                };
                 tracing::debug!("Sent `{}` to printer", String::from_utf8_lossy(&line).trim());
             },
             Ok(_) = serial.read_buf(&mut buf) => {
@@ -168,7 +174,7 @@ async fn printer_com_task(
                     let _ = responsetx.send(line); // ignore errors and keep trying
                 }
             },
-            else => break Err(Error::Disconnected),
+            else => break,
         }
     }
 }
@@ -185,6 +191,23 @@ impl Printer {
         let responses = Arc::downgrade(&response_sender);
         let com_task = tokio::task::spawn(printer_com_task(port, gcoderx, response_sender));
         let serializer = Serializer::default();
+        Self {
+            socket: Socket {
+                sender,
+                serializer,
+                responses,
+            },
+            com_task,
+        }
+    }
+
+    /// Create a new printer in a disconnected state
+    /// Most methods will return Err(Disconnected)
+    pub fn new_disconnected() -> Self {
+        let (sender, _) = mpsc::channel(1);
+        let responses = Weak::new();
+        let serializer = Serializer::default();
+        let com_task = tokio::spawn(async {});
         Self {
             socket: Socket {
                 sender,
