@@ -489,7 +489,6 @@ dependencies = [
  "gcode-serializer",
  "print3rs-core",
  "rustyline-async",
- "ryu",
  "tokio",
  "tokio-serial",
  "tracing",
@@ -575,8 +574,9 @@ checksum = "d626bb9dae77e28219937af045c257c28bfd3f69333c512553507f5f9798cb76"
 
 [[package]]
 name = "rustyline-async"
-version = "0.4.0"
-source = "git+https://github.com/arades79/rustyline-async?branch=testing#19e8e65b82fe0f543d09f03d6aa9161b95670514"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8b6eb06391513b2184f0a5405c11a4a0a5302e8be442f4c5c35267187c2b37d5"
 dependencies = [
  "crossterm",
  "futures-channel",
