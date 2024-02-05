@@ -288,7 +288,6 @@ async fn handle_command(
                 writer.write_all(e.to_string().as_bytes()).await?;
             }
         },
-        Debugging(_) => (), // handled externally
         Clear => (),        // needs external handling
         Quit => (),         // needs external handling
     };
