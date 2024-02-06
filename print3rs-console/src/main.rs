@@ -300,6 +300,22 @@ async fn handle_command(
     Ok(())
 }
 
+fn setup_logging(writer: SharedWriter) {
+    if let Ok(env_log) = tracing_subscriber::EnvFilter::builder()
+        .with_env_var("PRINT3RS_LOG")
+        .try_from_env()
+    {
+        let write_layer = tracing_subscriber::fmt::layer().with_writer(move || writer.clone());
+        let format_layer = tracing_subscriber::fmt::layer().without_time().compact();
+        let logger = tracing_subscriber::registry()
+            .with(env_log)
+            .with(write_layer)
+            .with(format_layer);
+
+        logger.init();
+    }
+}
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> eyre::Result<()> {
     let mut status = Status::Disconnected;
@@ -315,24 +331,7 @@ async fn main() -> eyre::Result<()> {
         .write_all(b"type `:help` for a list of commands\n")
         .await?;
 
-    // setup environment variable based logging
-    if let Ok(env_log) = tracing_subscriber::EnvFilter::builder()
-        .with_env_var("PRINT3RS_LOG")
-        .try_from_env()
-    {
-        let log_writer = writer.clone();
-
-        let subscriber = tracing_subscriber::fmt::layer()
-            .with_writer(move || log_writer.clone())
-            .without_time()
-            .compact();
-
-        let logger = tracing_subscriber::registry()
-            .with(env_log)
-            .with(subscriber);
-
-        logger.init();
-    }
+    setup_logging(writer.clone());
 
     loop {
         tokio::select! { Ok(ReadlineEvent::Line(line)) = readline.readline() => {
@@ -361,7 +360,7 @@ async fn main() -> eyre::Result<()> {
                 }
                 readline.add_history_entry(line);
             },
-            Ok(_) = &mut disconnect_notify.take().unwrap_or_else(|| {let (_tx, rx) = tokio::sync::oneshot::channel(); rx}), if disconnect_notify.is_some() => {
+            Ok(_) = &mut disconnect_notify.take().expect("select failed us"), if disconnect_notify.is_some() => {
                 disconnect(&mut printer, &mut printer_reader, &mut background_tasks, &mut status);
             },
             else => {readline.flush()?; return Ok(());}
