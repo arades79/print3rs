@@ -15,4 +15,4 @@ gcode-serializer ={ path = "../gcode-serializer"}
 tracing = "0.1.40"
 futures-util = "0.3.30"
 tokio-serial = {version = "5.4.4", features = ["libudev"]}
-tracing-subscriber = "0.3.18"
+tracing-subscriber = {version = "0.3.18", features = ["env-filter"]}

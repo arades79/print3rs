@@ -1,14 +1,20 @@
 mod commands;
 mod logging;
 
-use std::{borrow::Cow, collections::HashMap, fmt::Display, str::FromStr};
+use std::{
+    borrow::Cow,
+    collections::HashMap,
+    fmt::{Debug, Display},
+    str::FromStr,
+};
 
 use commands::{auto_connect, help, version};
 use futures_util::AsyncWriteExt;
 use rustyline_async::{Readline, ReadlineEvent, SharedWriter};
 use tokio::io::{AsyncReadExt, AsyncWriteExt as TokioAsyncWrite};
 use tokio_serial::SerialPortBuilderExt;
-use tracing::level_filters::LevelFilter;
+use tracing::{instrument::WithSubscriber, level_filters::LevelFilter};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use winnow::Parser;
 
 use print3rs_core::{Error as PrinterError, Printer};
@@ -288,8 +294,8 @@ async fn handle_command(
                 writer.write_all(e.to_string().as_bytes()).await?;
             }
         },
-        Clear => (),        // needs external handling
-        Quit => (),         // needs external handling
+        Clear => (), // needs external handling
+        Quit => (),  // needs external handling
     };
     Ok(())
 }
@@ -309,12 +315,24 @@ async fn main() -> eyre::Result<()> {
         .write_all(b"type `:help` for a list of commands\n")
         .await?;
 
-    let log_writer = writer.clone();
-    let log_subscriber = tracing_subscriber::FmtSubscriber::builder()
-        .with_writer(move || log_writer.clone())
-        .with_max_level(LevelFilter::OFF)
-        .finish();
-    tracing::subscriber::set_global_default(log_subscriber)?;
+    // setup environment variable based logging
+    if let Ok(env_log) = tracing_subscriber::EnvFilter::builder()
+        .with_env_var("PRINT3RS_LOG")
+        .try_from_env()
+    {
+        let log_writer = writer.clone();
+
+        let subscriber = tracing_subscriber::fmt::layer()
+            .with_writer(move || log_writer.clone())
+            .without_time()
+            .compact();
+
+        let logger = tracing_subscriber::registry()
+            .with(env_log)
+            .with(subscriber);
+
+        logger.init();
+    }
 
     loop {
         tokio::select! { Ok(ReadlineEvent::Line(line)) = readline.readline() => {
