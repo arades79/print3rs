@@ -360,7 +360,7 @@ async fn main() -> eyre::Result<()> {
                 }
                 readline.add_history_entry(line);
             },
-            Ok(_) = &mut disconnect_notify.take().expect("select failed us"), if disconnect_notify.is_some() => {
+            Ok(_) = &mut disconnect_notify.take().unwrap_or_else(|| {let (_tx, rx) = tokio::sync::oneshot::channel(); rx}), if disconnect_notify.is_some() => {
                 disconnect(&mut printer, &mut printer_reader, &mut background_tasks, &mut status);
             },
             else => {readline.flush()?; return Ok(());}
