@@ -3,37 +3,38 @@ use serde::{
     Serialize,
 };
 
-use core::sync::atomic::{AtomicI32 as Ai32, Ordering};
+use std::sync::{atomic::AtomicI32 as Ai32, atomic::Ordering, Arc};
 
 use bytes::{BufMut, BytesMut};
-
-static SEQUENCE: Ai32 = Ai32::new(1);
 
 #[derive(Debug)]
 pub struct Serializer<B = BytesMut> {
     buffer: B,
+    sequence: Arc<Ai32>,
 }
 
 pub type UnbufferedSerializer = Serializer<()>;
 
-impl Default for Serializer {
+impl<B> Default for Serializer<B>
+where
+    B: Default,
+{
     fn default() -> Self {
         Self {
-            buffer: BytesMut::with_capacity(64),
+            buffer: Default::default(),
+            sequence: Arc::new(1.into()),
         }
     }
 }
 
-impl<B> Clone for Serializer<B> where Serializer<B>: Default{
+impl<B> Clone for Serializer<B>
+where
+    B: Default,
+{
     fn clone(&self) -> Self {
-        Default::default()
-    }
-}
-
-impl Default for UnbufferedSerializer {
-    fn default() -> Self {
         Self {
             buffer: Default::default(),
+            sequence: Arc::clone(&self.sequence),
         }
     }
 }
@@ -41,7 +42,7 @@ impl Default for UnbufferedSerializer {
 impl Serializer {
     fn start_line(&mut self) -> GcodeLineWriter<BytesMut> {
         // seqcst likely overkill, needs testing to relax
-        let sequence = SEQUENCE.fetch_add(1, Ordering::SeqCst);
+        let sequence = self.sequence.fetch_add(1, Ordering::SeqCst);
         let mut line = GcodeLineWriter {
             buffer: &mut self.buffer,
             sequence: Some(sequence),
@@ -64,11 +65,14 @@ impl Serializer {
 
 impl<B> Serializer<B> {
     pub fn new(buffer: B) -> Self {
-        Self { buffer }
+        Self {
+            buffer,
+            sequence: Arc::new(1.into()),
+        }
     }
 
     pub fn serialize_into(&mut self, buffer: &mut impl BufMut, t: impl Serialize) -> i32 {
-        let sequence = SEQUENCE.fetch_add(1, Ordering::SeqCst);
+        let sequence = self.sequence.fetch_add(1, Ordering::SeqCst);
         let mut line_writer = GcodeLineWriter {
             buffer,
             sequence: Some(sequence),
@@ -520,7 +524,6 @@ where
 mod test {
     use super::*;
     use serde::Serialize;
-    use serial_test::serial;
 
     #[derive(Serialize)]
     struct M1234;
@@ -532,9 +535,7 @@ mod test {
     }
 
     #[test]
-    #[serial]
     fn unit_serialize_works() {
-        SEQUENCE.store(1, Ordering::SeqCst);
         let mut writer = Serializer::default();
         let out = writer.serialize_unsequenced(M1234);
         let expected: &[u8] = b"M1234\n";
@@ -546,11 +547,9 @@ mod test {
     }
 
     #[test]
-    #[serial]
     fn atomic_counter() {
-        SEQUENCE.store(1, Ordering::SeqCst);
         let mut writer1 = Serializer::default();
-        let mut writer2 = Serializer::default();
+        let mut writer2 = writer1.clone();
 
         let out = writer1.serialize(G1234 { x: -1, y: 2.3 });
         let expected: &[u8] = b"N1G1234X-1Y2.3*14\n";
