@@ -185,20 +185,26 @@ async fn handle_command(
                 }
             }
         }
-        Log(name, pattern) => match start_logging(name, pattern, printer).await {
-            Ok(log_task_handle) => {
-                background_tasks.insert(
-                    name.to_owned(),
-                    BackgroundTask {
-                        description: "log",
-                        abort_handle: log_task_handle.abort_handle(),
-                    },
-                );
+        Log(name, pattern) => {
+            if *status == Status::Disconnected {
+                not_connected(writer).await?;
+                return Ok(());
             }
-            Err(e) => {
-                writer.write_all(e.to_string().as_bytes()).await?;
-            }
-        },
+            match start_logging(name, pattern, printer).await {
+                Ok(log_task_handle) => {
+                    background_tasks.insert(
+                        name.to_owned(),
+                        BackgroundTask {
+                            description: "log",
+                            abort_handle: log_task_handle.abort_handle(),
+                        },
+                    );
+                }
+                Err(e) => {
+                    writer.write_all(e.to_string().as_bytes()).await?;
+                }
+            };
+        }
         Repeat(name, gcodes) => {
             if *status == Status::Disconnected {
                 not_connected(writer).await?;
