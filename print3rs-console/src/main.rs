@@ -5,7 +5,6 @@ use std::{
     borrow::Cow,
     collections::HashMap,
     fmt::{Debug, Display},
-    str::FromStr,
 };
 
 use commands::{auto_connect, help, version};
@@ -13,7 +12,6 @@ use futures_util::AsyncWriteExt;
 use rustyline_async::{Readline, ReadlineEvent, SharedWriter};
 use tokio::io::{AsyncReadExt, AsyncWriteExt as TokioAsyncWrite};
 use tokio_serial::SerialPortBuilderExt;
-use tracing::{instrument::WithSubscriber, level_filters::LevelFilter};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use winnow::Parser;
 
