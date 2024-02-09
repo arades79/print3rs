@@ -40,7 +40,42 @@ where
 }
 
 impl Serializer {
-    fn start_line(&mut self) -> GcodeLineWriter<BytesMut> {
+    /// Format the given serializable into the internal buffer, then split
+    /// off the bytes and return a handle to them.
+    ///
+    /// Sequence number (N<seq>) and checksum (*<sum>) are automatically handled,
+    /// the sequence number of the line is returned with the output for external tracking.
+    pub fn serialize(&mut self, t: impl Serialize) -> (i32, BytesMut) {
+        let sequence = self.start_line().serialize(t).finish();
+        (sequence, self.buffer.split())
+    }
+
+    /// Format the given serializable into the internal buffer, then split
+    /// off the bytes and return the handle to them.
+    ///
+    /// No sequnce number or checksum are added, internal state does not change.
+    pub fn serialize_unsequenced(&self, t: impl Serialize) -> BytesMut {
+        let mut temp_buffer = BytesMut::new();
+        self.serialize_unsequenced_into(&mut temp_buffer, t);
+        temp_buffer.split()
+    }
+}
+
+impl<B> Serializer<B> {
+    /// Crate a new serializer using supplied buffer.
+    /// If the supplied buffer doesn't implement `BufMut`, then only
+    /// `serialize_into` and alike are usable, where a `BufMut` is provided.
+    pub fn new(buffer: B) -> Self {
+        Self {
+            buffer,
+            sequence: Arc::new(1.into()),
+        }
+    }
+
+    fn start_line(&mut self) -> GcodeLineWriter<B>
+    where
+        B: BufMut,
+    {
         // seqcst likely overkill, needs testing to relax
         let sequence = self.sequence.fetch_add(1, Ordering::SeqCst);
         let mut line = GcodeLineWriter {
@@ -51,27 +86,11 @@ impl Serializer {
         line.serialize('N').serialize(sequence);
         line
     }
-    pub fn serialize(&mut self, t: impl Serialize) -> (i32, BytesMut) {
-        let sequence = self.start_line().serialize(t).finish();
-        (sequence, self.buffer.split())
-    }
 
-    pub fn serialize_unsequenced(&self, t: impl Serialize) -> BytesMut {
-        let mut temp_buffer = BytesMut::new();
-        self.serialize_unsequenced_into(&mut temp_buffer, t);
-        temp_buffer.split()
-    }
-}
-
-impl<B> Serializer<B> {
-    pub fn new(buffer: B) -> Self {
-        Self {
-            buffer,
-            sequence: Arc::new(1.into()),
-        }
-    }
-
-    pub fn serialize_into(&mut self, buffer: &mut impl BufMut, t: impl Serialize) -> i32 {
+    /// Use the given buffer to format and serialize the given `t` instead of using
+    /// the internal buffer. Sequencing and checksum are automatically applied,
+    /// internal sequence counter is still automatically incremented
+    pub fn serialize_into(&self, buffer: &mut impl BufMut, t: impl Serialize) -> i32 {
         let sequence = self.sequence.fetch_add(1, Ordering::SeqCst);
         let mut line_writer = GcodeLineWriter {
             buffer,
@@ -85,6 +104,9 @@ impl<B> Serializer<B> {
             .finish()
     }
 
+    /// Use the given buffer to format and serialize the given `t` instead of using
+    /// the internal buffer. No sequence number or checksum are included in the output,
+    /// the internal sequence counter is untouched.
     pub fn serialize_unsequenced_into(&self, buffer: &mut impl BufMut, t: impl Serialize) {
         let mut line_writer = GcodeLineWriter {
             buffer,
@@ -92,6 +114,19 @@ impl<B> Serializer<B> {
             checksum: 0,
         };
         line_writer.serialize(t).finish();
+    }
+
+    /// Sets the internal sequence counter to the provided integer.
+    /// This also affects all serializers cloned from this instance.
+    ///
+    /// Serializer instances load the sequence counter very early in serialization,
+    /// thus if another thread is serializing when the sequence is set, it will not
+    /// apply to anything that has already begun to be serialized.
+    ///
+    /// Note: Sometimes devices need to be told when sequence numbers don't change sequentially;
+    /// for instance Marlin 3D printers require an `M110 N<seq>` to change line number.
+    pub fn set_sequence(&self, new_sequence: i32) {
+        self.sequence.store(new_sequence, Ordering::SeqCst);
     }
 }
 
