@@ -1,7 +1,6 @@
 use std::{
     fmt::Debug,
     ops::{Deref, DerefMut},
-    sync::{Arc, Weak},
 };
 
 use serde::Serialize;
