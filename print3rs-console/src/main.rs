@@ -1,3 +1,7 @@
+//! # print3rs-console
+//!  A shell to talk to 3D printers or other Gcode accepting serial devices, inspired by Pronsole
+//! 
+
 mod commands;
 mod logging;
 
