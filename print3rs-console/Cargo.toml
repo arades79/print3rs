@@ -2,6 +2,7 @@
 name = "print3rs-console"
 version = "0.1.0"
 edition = "2021"
+license = "MIT OR Apache-2.0"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -9,7 +10,7 @@ edition = "2021"
 eyre = "0.6.11"
 rustyline-async = "0.4.2"
 tokio = { version = "1.35.1", features = ["rt", "macros", "io-util", "time", "fs"] }
-winnow = "0.5.35"
+winnow = "0.6"
 print3rs-core ={ path = "../print3rs-core"}
 gcode-serializer ={ path = "../gcode-serializer"}
 tracing = "0.1.40"

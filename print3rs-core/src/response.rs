@@ -1,5 +1,5 @@
 use winnow::{
-    ascii::{dec_uint, multispace0, space0},
+    ascii::{dec_int, dec_uint, multispace0, space0},
     combinator::{alt, opt, preceded, terminated},
     prelude::*,
 };
@@ -14,7 +14,7 @@ pub enum Response {
 fn ok_response(input: &mut &[u8]) -> PResult<Response> {
     match preceded(
         (space0, "ok", opt(":"), space0, opt(b'N')),
-        terminated(opt(dec_uint), multispace0),
+        terminated(opt(dec_int), multispace0),
     )
     .parse_next(input)?
     {
@@ -26,7 +26,7 @@ fn ok_response(input: &mut &[u8]) -> PResult<Response> {
 fn resend_response(input: &mut &[u8]) -> PResult<Response> {
     let sequence = preceded(
         (space0, "Resend:", space0),
-        terminated(dec_uint, multispace0),
+        terminated(dec_int, multispace0),
     )
     .parse_next(input)?;
     Ok(Response::Resend(sequence))

@@ -1,8 +1,9 @@
 [package]
 name = "gcode-serializer"
+description = "Gcode serde support for comminucating with 3D printers or CNC machines. Part of the print3rs project."
 version = "0.1.0"
 edition = "2021"
-
+license = "MIT OR Apache-2.0"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
