@@ -113,6 +113,7 @@ impl Socket {
 }
 
 /// Handle for asynchronous serial communication with a 3D printer
+#[derive(Debug)]
 pub struct Printer {
     socket: Socket,
     com_task: tokio::task::JoinHandle<()>,
@@ -121,6 +122,12 @@ pub struct Printer {
 impl Drop for Printer {
     fn drop(&mut self) {
         self.com_task.abort()
+    }
+}
+
+impl Default for Printer {
+    fn default() -> Self {
+        Self::new_disconnected()
     }
 }
 
@@ -246,6 +253,7 @@ impl Printer {
     pub fn remote_disconnect(&self) -> tokio::task::AbortHandle {
         self.com_task.abort_handle()
     }
+    
 }
 
 impl Deref for Printer {
