@@ -1,4 +1,4 @@
-use std::{default, fmt::Debug, marker::PhantomData};
+use std::{fmt::Debug, marker::PhantomData};
 
 use serde::Serialize;
 use winnow::Parser;
@@ -7,7 +7,7 @@ mod response;
 
 use response::response;
 pub use response::Response;
-use tokio_serial::{SerialPort, SerialStream};
+use tokio_serial::SerialStream;
 
 use gcode_serializer::Serializer;
 
