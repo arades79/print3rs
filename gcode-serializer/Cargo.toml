@@ -9,9 +9,7 @@ license = "MIT OR Apache-2.0"
 [dependencies]
 itoa = "1.0.10"
 ryu = "1.0.16"
-bytes = "1.5.0"
 serde = { version = "1.0.195" }
 
 [dev-dependencies]
 serde = { version = "1.0.195", features = ["derive"] }
-serial_test = "3"

@@ -5,115 +5,52 @@ use serde::{
 
 use std::sync::{atomic::AtomicI32 as Ai32, atomic::Ordering, Arc};
 
-use bytes::{BufMut, BytesMut};
+pub const SEQUENCE_START: i32 = 1;
 
-#[derive(Debug)]
-pub struct Serializer<B = BytesMut> {
-    buffer: B,
+#[derive(Debug, Clone)]
+pub struct Sequenced {
     sequence: Arc<Ai32>,
 }
 
-pub type UnbufferedSerializer = Serializer<()>;
-
-impl<B> Default for Serializer<B>
-where
-    B: Default,
-{
+impl Default for Sequenced {
     fn default() -> Self {
         Self {
-            buffer: Default::default(),
-            sequence: Arc::new(1.into()),
+            sequence: Arc::new(SEQUENCE_START.into()),
         }
     }
 }
 
-impl<B> Clone for Serializer<B>
-where
-    B: Default,
-{
-    fn clone(&self) -> Self {
-        Self {
-            buffer: Default::default(),
-            sequence: Arc::clone(&self.sequence),
-        }
-    }
+pub fn serialize_unsequenced(t: impl Serialize) -> Box<[u8]> {
+    let mut line = GcodeLine::new();
+    line.serialize(t);
+    line.finish()
 }
 
-impl Serializer {
+impl Sequenced {
     /// Format the given serializable into the internal buffer, then split
     /// off the bytes and return a handle to them.
     ///
     /// Sequence number (N<seq>) and checksum (*<sum>) are automatically handled,
     /// the sequence number of the line is returned with the output for external tracking.
-    pub fn serialize(&mut self, t: impl Serialize) -> (i32, BytesMut) {
-        let sequence = self.start_line().serialize(t).finish();
-        (sequence, self.buffer.split())
+    pub fn serialize(&self, t: impl Serialize) -> (i32, Box<[u8]>) {
+        let sequence = self.sequence.fetch_add(1, Ordering::SeqCst);
+        let mut line = GcodeLine::new();
+        line.serialize('N').serialize(sequence).serialize(t);
+        let bytes = line.finish_with_checksum();
+        (sequence, bytes)
     }
 
     /// Format the given serializable into the internal buffer, then split
     /// off the bytes and return the handle to them.
     ///
     /// No sequnce number or checksum are added, internal state does not change.
-    pub fn serialize_unsequenced(&self, t: impl Serialize) -> BytesMut {
-        let mut temp_buffer = BytesMut::new();
-        self.serialize_unsequenced_into(&mut temp_buffer, t);
-        temp_buffer.split()
-    }
-}
-
-impl<B> Serializer<B> {
-    /// Crate a new serializer using supplied buffer.
-    /// If the supplied buffer doesn't implement `BufMut`, then only
-    /// `serialize_into` and alike are usable, where a `BufMut` is provided.
-    pub fn new(buffer: B) -> Self {
-        Self {
-            buffer,
-            sequence: Arc::new(1.into()),
-        }
+    pub fn serialize_unsequenced(&self, t: impl Serialize) -> Box<[u8]> {
+        serialize_unsequenced(t)
     }
 
-    fn start_line(&mut self) -> GcodeLineWriter<B>
-    where
-        B: BufMut,
-    {
-        // seqcst likely overkill, needs testing to relax
-        let sequence = self.sequence.fetch_add(1, Ordering::SeqCst);
-        let mut line = GcodeLineWriter {
-            buffer: &mut self.buffer,
-            sequence: Some(sequence),
-            checksum: 0,
-        };
-        line.serialize('N').serialize(sequence);
-        line
-    }
-
-    /// Use the given buffer to format and serialize the given `t` instead of using
-    /// the internal buffer. Sequencing and checksum are automatically applied,
-    /// internal sequence counter is still automatically incremented
-    pub fn serialize_into(&self, buffer: &mut impl BufMut, t: impl Serialize) -> i32 {
-        let sequence = self.sequence.fetch_add(1, Ordering::SeqCst);
-        let mut line_writer = GcodeLineWriter {
-            buffer,
-            sequence: Some(sequence),
-            checksum: 0,
-        };
-        line_writer
-            .serialize('N')
-            .serialize(sequence)
-            .serialize(t)
-            .finish()
-    }
-
-    /// Use the given buffer to format and serialize the given `t` instead of using
-    /// the internal buffer. No sequence number or checksum are included in the output,
-    /// the internal sequence counter is untouched.
-    pub fn serialize_unsequenced_into(&self, buffer: &mut impl BufMut, t: impl Serialize) {
-        let mut line_writer = GcodeLineWriter {
-            buffer,
-            sequence: None,
-            checksum: 0,
-        };
-        line_writer.serialize(t).finish();
+    /// Crate a new serializer
+    pub fn new() -> Self {
+        Default::default()
     }
 
     /// Sets the internal sequence counter to the provided integer.
@@ -130,24 +67,26 @@ impl<B> Serializer<B> {
     }
 }
 
-#[derive(Debug)]
-struct GcodeLineWriter<'a, B> {
-    buffer: &'a mut B,
-    sequence: Option<i32>,
+#[derive(Debug, Default)]
+struct GcodeLine {
+    buffer: Vec<u8>,
     checksum: u8,
 }
 
-impl<'a, B> GcodeLineWriter<'a, B>
-where
-    B: BufMut,
-{
+impl GcodeLine {
+    fn new() -> Self {
+        Self {
+            buffer: Vec::new(),
+            checksum: 0,
+        }
+    }
     fn checksum(&mut self, buf: &[u8]) {
         for byte in buf {
             self.checksum ^= byte;
         }
     }
     fn write(&mut self, buf: &[u8]) {
-        self.buffer.put_slice(buf);
+        self.buffer.extend_from_slice(buf);
         self.checksum(buf);
     }
     fn serialize(&mut self, t: impl Serialize) -> &mut Self {
@@ -155,23 +94,21 @@ where
         self
     }
 
+    fn finish_with_checksum(mut self) -> Box<[u8]> {
+        self.buffer.push(b'*');
+        self.buffer
+            .extend_from_slice(itoa::Buffer::new().format(self.checksum).as_bytes());
+        self.finish()
+    }
+
     /// finish the current line and give the sequence number of it for tracking, 0 for unsequenced
-    fn finish(&mut self) -> i32 {
-        if let Some(_sequence) = self.sequence {
-            self.buffer.put_u8(b'*');
-            self.buffer
-                .put(itoa::Buffer::new().format(self.checksum).as_bytes());
-        };
-        self.buffer.put_u8(b'\n');
-        self.sequence.unwrap_or_default()
+    fn finish(mut self) -> Box<[u8]> {
+        self.buffer.push(b'\n');
+        self.buffer.into_boxed_slice()
     }
 }
 
-impl<'item, 'line, B> ser::Serializer for &'item mut GcodeLineWriter<'line, B>
-where
-    'line: 'item,
-    B: BufMut,
-{
+impl ser::Serializer for &mut GcodeLine {
     type Ok = ();
 
     type Error = core::fmt::Error;
@@ -387,11 +324,7 @@ where
     }
 }
 
-impl<'item, 'line, B> ser::SerializeSeq for &'item mut GcodeLineWriter<'line, B>
-where
-    'line: 'item,
-    B: BufMut,
-{
+impl ser::SerializeSeq for &mut GcodeLine {
     type Ok = ();
 
     type Error = core::fmt::Error;
@@ -408,11 +341,7 @@ where
     }
 }
 
-impl<'item, 'line, B> ser::SerializeMap for &'item mut GcodeLineWriter<'line, B>
-where
-    'line: 'item,
-    B: BufMut,
-{
+impl ser::SerializeMap for &mut GcodeLine {
     type Ok = ();
 
     type Error = core::fmt::Error;
@@ -436,11 +365,7 @@ where
     }
 }
 
-impl<'item, 'line, B> ser::SerializeStruct for &'item mut GcodeLineWriter<'line, B>
-where
-    'line: 'item,
-    B: BufMut,
-{
+impl ser::SerializeStruct for &mut GcodeLine {
     type Ok = ();
 
     type Error = core::fmt::Error;
@@ -467,11 +392,7 @@ where
     }
 }
 
-impl<'item, 'line, B> ser::SerializeStructVariant for &'item mut GcodeLineWriter<'line, B>
-where
-    'line: 'item,
-    B: BufMut,
-{
+impl ser::SerializeStructVariant for &mut GcodeLine {
     type Ok = ();
 
     type Error = core::fmt::Error;
@@ -492,11 +413,7 @@ where
     }
 }
 
-impl<'item, 'line, B> ser::SerializeTuple for &'item mut GcodeLineWriter<'line, B>
-where
-    'line: 'item,
-    B: BufMut,
-{
+impl ser::SerializeTuple for &mut GcodeLine {
     type Ok = ();
 
     type Error = core::fmt::Error;
@@ -513,11 +430,7 @@ where
     }
 }
 
-impl<'item, 'line, B> ser::SerializeTupleStruct for &'item mut GcodeLineWriter<'line, B>
-where
-    'line: 'item,
-    B: BufMut,
-{
+impl ser::SerializeTupleStruct for &mut GcodeLine {
     type Ok = ();
 
     type Error = core::fmt::Error;
@@ -534,11 +447,7 @@ where
     }
 }
 
-impl<'item, 'line, B> ser::SerializeTupleVariant for &'item mut GcodeLineWriter<'line, B>
-where
-    'line: 'item,
-    B: BufMut,
-{
+impl ser::SerializeTupleVariant for &mut GcodeLine {
     type Ok = ();
 
     type Error = core::fmt::Error;
@@ -571,35 +480,35 @@ mod test {
 
     #[test]
     fn unit_serialize_works() {
-        let mut writer = Serializer::default();
+        let writer = Sequenced::default();
         let out = writer.serialize_unsequenced(M1234);
         let expected: &[u8] = b"M1234\n";
-        assert_eq!(out, expected);
+        assert_eq!(out.as_ref(), expected);
 
         let out = writer.serialize(G1234 { x: -1, y: 2.3 });
         let expected: &[u8] = b"N1G1234X-1Y2.3*14\n";
-        assert_eq!(out.1, expected);
+        assert_eq!(out.1.as_ref(), expected);
     }
 
     #[test]
     fn atomic_counter() {
-        let mut writer1 = Serializer::default();
-        let mut writer2 = writer1.clone();
+        let writer1 = Sequenced::default();
+        let writer2 = writer1.clone();
 
         let out = writer1.serialize(G1234 { x: -1, y: 2.3 });
         let expected: &[u8] = b"N1G1234X-1Y2.3*14\n";
-        assert_eq!(out.1, expected);
+        assert_eq!(out.1.as_ref(), expected);
 
         std::thread::spawn(move || {
             let out = writer2.serialize(G1234 { x: -1, y: 2.3 });
             let expected: &[u8] = b"N2G1234X-1Y2.3*13\n";
-            assert_eq!(out.1, expected);
+            assert_eq!(out.1.as_ref(), expected);
         })
         .join()
         .unwrap();
 
         let out = writer1.serialize(G1234 { x: -1, y: 2.3 });
         let expected: &[u8] = b"N3G1234X-1Y2.3*12\n";
-        assert_eq!(out.1, expected);
+        assert_eq!(out.1.as_ref(), expected);
     }
 }

@@ -9,7 +9,7 @@ use response::response;
 pub use response::Response;
 use tokio_serial::SerialStream;
 
-use gcode_serializer::Serializer;
+use gcode_serializer::Sequenced;
 
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
@@ -83,7 +83,7 @@ pub async fn search_for_sequence(sequence: i32, mut responses: LineStream) -> Re
 #[derive(Debug)]
 pub struct Socket {
     sender: mpsc::Sender<Bytes>,
-    serializer: Serializer,
+    serializer: Sequenced,
     pub responses: broadcast::Receiver<Bytes>,
 }
 
@@ -252,7 +252,7 @@ impl<S> Printer<S> {
         let (sender, gcoderx) = mpsc::channel::<Bytes>(8);
         let (response_sender, responses) = broadcast::channel(64);
         let com_task = tokio::task::spawn(printer_com_task(port, gcoderx, response_sender));
-        let serializer = Serializer::default();
+        let serializer = Sequenced::default();
         Self::Connected {
             socket: Socket {
                 sender,
