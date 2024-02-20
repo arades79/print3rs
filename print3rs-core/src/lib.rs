@@ -1,7 +1,4 @@
-use std::{
-    fmt::Debug,
-    ops::{Deref, DerefMut},
-};
+use std::{default, fmt::Debug, marker::PhantomData};
 
 use serde::Serialize;
 use winnow::Parser;
@@ -15,14 +12,55 @@ use tokio_serial::{SerialPort, SerialStream};
 use gcode_serializer::Serializer;
 
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
+    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     sync::{broadcast, mpsc},
 };
+
+use sealed::sealed;
 
 use bytes::{Bytes, BytesMut};
 
 pub type Serial = SerialStream;
 pub type LineStream = broadcast::Receiver<Bytes>;
+
+#[sealed]
+#[allow(async_fn_in_trait)]
+pub trait PrinterComm {
+    /// Serialize a struct implementing Serialize and send the bytes to the printer
+    ///
+    /// Sent bytes will include a sequence number and checksum.
+    /// For printers which support advanced OK messages this will allow TCP like checked communication.
+    ///
+    /// When called, a local task is spawned to check for a matching OK message.
+    /// The handle to this task is returned after the first await on success.
+    /// This allows simple synchronization of any sent command by awaiting twice.
+    async fn send(
+        &mut self,
+        gcode: impl Serialize + Debug,
+    ) -> Result<tokio::task::JoinHandle<Response>, Error>;
+
+    /// Serialize anything implementing Serialize and send the bytes to the printer
+    ///
+    /// There is no guarantee that a command is correctly recieved or serviced;
+    /// any synchronization based on responses will have to be done manually.
+    ///
+    /// If your printer supports it, the sequenced `send` function is preferred,
+    /// although this version is slightly lower overhead.
+    async fn send_unsequenced(&self, gcode: impl Serialize + Debug) -> Result<(), Error>;
+
+    /// Send any raw sequence of bytes to the printer
+    async fn send_raw(&self, gcode: &[u8]) -> Result<(), Error>;
+
+    /// Read the next line from the printer
+    ///
+    /// May not recieve all lines, if calls to this function are spaced
+    /// far apart, the buffer may overfill and the oldest messages will
+    /// be dropped. In this case the oldest available message is returned.
+    async fn read_next_line(&mut self) -> Result<Bytes, Error>;
+
+    /// Obtain a broadcast receiver returning all lines received by the printer
+    fn subscribe_lines(&self) -> Result<LineStream, Error>;
+}
 
 pub async fn search_for_sequence(sequence: i32, mut responses: LineStream) -> Response {
     tracing::debug!("Started looking for Ok {sequence}");
@@ -49,7 +87,18 @@ pub struct Socket {
     pub responses: broadcast::Receiver<Bytes>,
 }
 
-impl Socket {
+impl Clone for Socket {
+    fn clone(&self) -> Self {
+        Self {
+            sender: self.sender.clone(),
+            serializer: self.serializer.clone(),
+            responses: self.responses.resubscribe(),
+        }
+    }
+}
+
+#[sealed]
+impl PrinterComm for Socket {
     /// Serialize a struct implementing Serialize and send the bytes to the printer
     ///
     /// Sent bytes will include a sequence number and checksum.
@@ -59,13 +108,13 @@ impl Socket {
     /// The handle to this task is returned after the first await on success.
     /// This allows simple synchronization of any sent command by awaiting twice.
     #[tracing::instrument(level = "debug", skip(self))]
-    pub async fn send(
+    async fn send(
         &mut self,
         gcode: impl Serialize + Debug,
     ) -> Result<tokio::task::JoinHandle<Response>, Error> {
         let send_slot = self.sender.reserve().await?;
         let (sequence, bytes) = self.serializer.serialize(gcode);
-        let sequenced_ok_watch = self.subscribe_lines();
+        let sequenced_ok_watch = self.subscribe_lines().expect("Socket is always connected");
         send_slot.send(bytes.freeze());
         let wait_for_response =
             tokio::task::spawn(search_for_sequence(sequence, sequenced_ok_watch));
@@ -79,14 +128,14 @@ impl Socket {
     ///
     /// If your printer supports it, the sequenced `send` function is preferred,
     /// although this version is slightly lower overhead.
-    pub async fn send_unsequenced(&self, gcode: impl Serialize + Debug) -> Result<(), Error> {
+    async fn send_unsequenced(&self, gcode: impl Serialize + Debug) -> Result<(), Error> {
         let bytes = self.serializer.serialize_unsequenced(gcode);
         self.sender.send(bytes.freeze()).await?;
         Ok(())
     }
 
     /// Send any raw sequence of bytes to the printer
-    pub async fn send_raw(&self, gcode: &[u8]) -> Result<(), Error> {
+    async fn send_raw(&self, gcode: &[u8]) -> Result<(), Error> {
         self.sender.send(Bytes::copy_from_slice(gcode)).await?;
         Ok(())
     }
@@ -96,7 +145,7 @@ impl Socket {
     /// May not recieve all lines, if calls to this function are spaced
     /// far apart, the buffer may overfill and the oldest messages will
     /// be dropped. In this case the oldest available message is returned.
-    pub async fn read_next_line(&mut self) -> Result<Bytes, Error> {
+    async fn read_next_line(&mut self) -> Result<Bytes, Error> {
         loop {
             match self.responses.recv().await {
                 Ok(line) => break Ok(line),
@@ -107,27 +156,28 @@ impl Socket {
     }
 
     /// Obtain a broadcast receiver returning all lines received by the printer
-    pub fn subscribe_lines(&self) -> LineStream {
-        self.responses.resubscribe()
+    fn subscribe_lines(&self) -> Result<LineStream, Error> {
+        Ok(self.responses.resubscribe())
     }
 }
 
 /// Handle for asynchronous serial communication with a 3D printer
-#[derive(Debug)]
-pub struct Printer {
-    socket: Socket,
-    com_task: tokio::task::JoinHandle<()>,
+#[derive(Debug, Default)]
+pub enum Printer<S = Serial> {
+    #[default]
+    Disconnected,
+    Connected {
+        socket: Socket,
+        com_task: tokio::task::JoinHandle<()>,
+        _transport: PhantomData<S>,
+    },
 }
 
-impl Drop for Printer {
+impl<S> Drop for Printer<S> {
     fn drop(&mut self) {
-        self.com_task.abort()
-    }
-}
-
-impl Default for Printer {
-    fn default() -> Self {
-        Self::new_disconnected()
+        if let Self::Connected { com_task, .. } = self {
+            com_task.abort()
+        }
     }
 }
 
@@ -154,29 +204,26 @@ pub enum Error {
 
 /// Loop for handling sending/receiving in the background with possible split senders/receivers
 async fn printer_com_task(
-    mut serial: Serial,
+    mut transport: impl AsyncRead + AsyncWrite + Unpin,
     mut gcoderx: mpsc::Receiver<Bytes>,
     responsetx: broadcast::Sender<Bytes>,
 ) {
     let mut buf = BytesMut::with_capacity(1024);
     tracing::debug!("Started background printer communications");
     loop {
-        if serial.read_carrier_detect().is_err() {
-            break;
-        }
         tokio::select! {
             Some(line) = gcoderx.recv() => {
-                match serial.write_all(&line).await {
+                match transport.write_all(&line).await {
                     Ok(_) => (),
                     Err(_) => break,
                 };
-                match serial.flush().await {
+                match transport.flush().await {
                     Ok(_) => (),
                     Err(_) => break,
                 };
                 tracing::debug!("Sent `{}` to printer", String::from_utf8_lossy(&line).trim());
             },
-            Ok(_) = serial.read_buf(&mut buf) => {
+            Ok(_) = transport.read_buf(&mut buf) => {
                 while let Some(n) = buf.iter().position(|b| *b == b'\n') {
                     let line = buf.split_to(n + 1).freeze();
                     tracing::debug!("Received `{}` from printer", String::from_utf8_lossy(&line).trim());
@@ -191,81 +238,105 @@ async fn printer_com_task(
     }
 }
 
-impl Printer {
+impl<S> Printer<S> {
     /// Create a new printer from a SerialStream.
     ///
     /// Starts a local task to handle printer communication asynchronously
     #[tracing::instrument(level = "debug")]
-    pub fn new(port: Serial) -> Self {
+    pub fn new(port: S) -> Self
+    where
+        S: AsyncRead + AsyncWrite + Unpin + Send + 'static + Debug,
+    {
         let (sender, gcoderx) = mpsc::channel::<Bytes>(8);
         let (response_sender, responses) = broadcast::channel(64);
         let com_task = tokio::task::spawn(printer_com_task(port, gcoderx, response_sender));
         let serializer = Serializer::default();
-        Self {
+        Self::Connected {
             socket: Socket {
                 sender,
                 serializer,
                 responses,
             },
             com_task,
+            _transport: Default::default(),
         }
     }
 
-    /// Create a new printer in a disconnected state
-    /// Most methods will return Err(Disconnected)
-    pub fn new_disconnected() -> Self {
-        let (sender, _) = mpsc::channel(1);
-        let (_, responses) = broadcast::channel(1);
-        let serializer = Serializer::default();
-        let com_task = tokio::spawn(async {});
-        Self {
-            socket: Socket {
-                sender,
-                serializer,
-                responses,
-            },
-            com_task,
-        }
-    }
-
-    /// Recreates a disconnected printer in place
-    /// All previous handles will be invalid and need recreation
-    pub fn connect(&mut self, port: Serial) {
-        let new_printer = Printer::new(port);
-        let _ = core::mem::replace(self, new_printer);
+    /// Connect to a device
+    pub fn connect(&mut self, port: S)
+    where
+        S: AsyncRead + AsyncWrite + Unpin + Send + 'static + Debug,
+    {
+        *self = Printer::new(port);
     }
 
     /// Obtain a socket to talk to printer
-    pub fn socket(&self) -> Socket {
-        Socket {
-            sender: self.sender.clone(),
-            serializer: self.serializer.clone(),
-            responses: self.responses.resubscribe(),
+    pub fn socket(&self) -> Option<Socket> {
+        match self {
+            Self::Disconnected => None,
+            Self::Connected { socket, .. } => Some(socket.clone()),
         }
     }
 
     /// Disconnect the printer and shutdown background communication
-    pub fn disconnect(&self) {
-        self.com_task.abort();
+    pub fn disconnect(&mut self) {
+        *self = Self::Disconnected
+    }
+
+    pub fn is_connected(&self) -> bool {
+        match self {
+            Printer::Disconnected => false,
+            Printer::Connected { .. } => true,
+        }
     }
 
     /// Get a handle to disconnect the printer from some background task
-    pub fn remote_disconnect(&self) -> tokio::task::AbortHandle {
-        self.com_task.abort_handle()
-    }
-    
-}
-
-impl Deref for Printer {
-    type Target = Socket;
-
-    fn deref(&self) -> &Self::Target {
-        &self.socket
+    pub fn remote_disconnect(&self) -> Option<tokio::task::AbortHandle> {
+        match self {
+            Printer::Disconnected => None,
+            Printer::Connected { com_task, .. } => Some(com_task.abort_handle()),
+        }
     }
 }
 
-impl DerefMut for Printer {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.socket
+#[sealed]
+impl PrinterComm for Printer {
+    async fn send(
+        &mut self,
+        gcode: impl Serialize + Debug,
+    ) -> Result<tokio::task::JoinHandle<Response>, Error> {
+        match self {
+            Printer::Disconnected => Err(Error::Disconnected),
+            Printer::Connected { socket, .. } => socket.send(gcode).await,
+        }
+    }
+
+    async fn send_unsequenced(&self, gcode: impl Serialize + Debug) -> Result<(), Error> {
+        match self {
+            Printer::Disconnected => Err(Error::Disconnected),
+            Printer::Connected { socket, .. } => socket.send_unsequenced(gcode).await,
+        }
+    }
+
+    async fn send_raw(&self, gcode: &[u8]) -> Result<(), Error> {
+        match self {
+            Printer::Disconnected => Err(Error::Disconnected),
+            Printer::Connected { socket, .. } => socket.send_raw(gcode).await,
+        }
+    }
+
+    async fn read_next_line(&mut self) -> Result<Bytes, Error> {
+        match self {
+            Printer::Disconnected => Err(Error::Disconnected),
+            Printer::Connected { socket, .. } => socket.read_next_line().await,
+        }
+    }
+
+    fn subscribe_lines(&self) -> Result<LineStream, Error> {
+        if let Self::Connected { socket, .. } = self {
+            socket.subscribe_lines()
+        } else {
+            Err(Error::Disconnected)
+        }
     }
 }
