@@ -35,7 +35,7 @@ impl Sequenced {
     pub fn serialize(&self, t: impl Serialize) -> (i32, Box<[u8]>) {
         let sequence = self.sequence.fetch_add(1, Ordering::SeqCst);
         let mut line = GcodeLine::new();
-        line.serialize('N').serialize(sequence).serialize(t);
+        line.serialize(('N', sequence, t));
         let bytes = line.finish_with_checksum();
         (sequence, bytes)
     }
