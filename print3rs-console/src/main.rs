@@ -1,6 +1,6 @@
 //! # print3rs-console
 //!  A shell to talk to 3D printers or other Gcode accepting serial devices, inspired by Pronsole
-//! 
+//!
 
 mod commands;
 mod logging;
@@ -19,7 +19,7 @@ use tokio_serial::SerialPortBuilderExt;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use winnow::Parser;
 
-use print3rs_core::{Error as PrinterError, Printer};
+use print3rs_core::{Error as PrinterError, SerialPrinter as Printer};
 
 fn connect_printer(
     printer: &Printer,
