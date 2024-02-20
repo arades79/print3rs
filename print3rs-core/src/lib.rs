@@ -25,7 +25,7 @@ pub type LineStream = broadcast::Receiver<Bytes>;
 
 #[sealed]
 #[allow(async_fn_in_trait)]
-pub trait PrinterComm {
+pub trait AsyncPrinterComm {
     /// Serialize a struct implementing Serialize and send the bytes to the printer
     ///
     /// Sent bytes will include a sequence number and checksum.
@@ -98,7 +98,7 @@ impl Clone for Socket {
 }
 
 #[sealed]
-impl PrinterComm for Socket {
+impl AsyncPrinterComm for Socket {
     /// Serialize a struct implementing Serialize and send the bytes to the printer
     ///
     /// Sent bytes will include a sequence number and checksum.
@@ -163,15 +163,17 @@ impl PrinterComm for Socket {
 
 /// Handle for asynchronous serial communication with a 3D printer
 #[derive(Debug, Default)]
-pub enum Printer<S = Serial> {
+pub enum Printer<Transport> {
     #[default]
     Disconnected,
     Connected {
         socket: Socket,
         com_task: tokio::task::JoinHandle<()>,
-        _transport: PhantomData<S>,
+        _transport: PhantomData<Transport>,
     },
 }
+
+pub type SerialPrinter = Printer<Serial>;
 
 impl<S> Drop for Printer<S> {
     fn drop(&mut self) {
@@ -300,7 +302,7 @@ impl<S> Printer<S> {
 }
 
 #[sealed]
-impl PrinterComm for Printer {
+impl<S> AsyncPrinterComm for Printer<S> {
     async fn send(
         &mut self,
         gcode: impl Serialize + Debug,
