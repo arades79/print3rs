@@ -15,3 +15,4 @@ tokio = { version = "1.35.1", features = ["rt", "io-util", "sync", "macros"] }
 bytes = "1.5.0"
 thiserror = "1.0.56"
 gcode-serializer = { path = "../gcode-serializer" }
+sealed = "0.5.0"
