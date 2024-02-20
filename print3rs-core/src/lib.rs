@@ -9,7 +9,7 @@ use response::response;
 pub use response::Response;
 use tokio_serial::SerialStream;
 
-use gcode_serializer::Sequenced;
+use gcode_serializer::{serialize_unsequenced, Sequenced};
 
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
@@ -82,7 +82,7 @@ pub async fn search_for_sequence(sequence: i32, mut responses: LineStream) -> Re
 
 #[derive(Debug)]
 pub struct Socket {
-    sender: mpsc::Sender<Bytes>,
+    sender: mpsc::Sender<Box<[u8]>>,
     serializer: Sequenced,
     pub responses: broadcast::Receiver<Bytes>,
 }
@@ -115,7 +115,7 @@ impl AsyncPrinterComm for Socket {
         let send_slot = self.sender.reserve().await?;
         let (sequence, bytes) = self.serializer.serialize(gcode);
         let sequenced_ok_watch = self.subscribe_lines().expect("Socket is always connected");
-        send_slot.send(bytes.freeze());
+        send_slot.send(bytes);
         let wait_for_response =
             tokio::task::spawn(search_for_sequence(sequence, sequenced_ok_watch));
         Ok(wait_for_response)
@@ -129,14 +129,16 @@ impl AsyncPrinterComm for Socket {
     /// If your printer supports it, the sequenced `send` function is preferred,
     /// although this version is slightly lower overhead.
     async fn send_unsequenced(&self, gcode: impl Serialize + Debug) -> Result<(), Error> {
-        let bytes = self.serializer.serialize_unsequenced(gcode);
-        self.sender.send(bytes.freeze()).await?;
+        let bytes = serialize_unsequenced(gcode);
+        self.sender.send(bytes).await?;
         Ok(())
     }
 
     /// Send any raw sequence of bytes to the printer
     async fn send_raw(&self, gcode: &[u8]) -> Result<(), Error> {
-        self.sender.send(Bytes::copy_from_slice(gcode)).await?;
+        self.sender
+            .send(gcode.to_owned().into_boxed_slice())
+            .await?;
         Ok(())
     }
 
@@ -192,7 +194,7 @@ pub enum Error {
     ResponseSender(#[from] broadcast::error::SendError<Bytes>),
 
     #[error("Couldn't send data to background task\nError message: {0}")]
-    Sender(#[from] mpsc::error::SendError<Bytes>),
+    Sender(#[from] mpsc::error::SendError<Box<[u8]>>),
 
     #[error("Couldn't reserve a slot to send message\nError message: {0}")]
     SendReserve(#[from] mpsc::error::SendError<()>),
@@ -207,7 +209,7 @@ pub enum Error {
 /// Loop for handling sending/receiving in the background with possible split senders/receivers
 async fn printer_com_task(
     mut transport: impl AsyncRead + AsyncWrite + Unpin,
-    mut gcoderx: mpsc::Receiver<Bytes>,
+    mut gcoderx: mpsc::Receiver<Box<[u8]>>,
     responsetx: broadcast::Sender<Bytes>,
 ) {
     let mut buf = BytesMut::with_capacity(1024);
@@ -249,7 +251,7 @@ impl<S> Printer<S> {
     where
         S: AsyncRead + AsyncWrite + Unpin + Send + 'static + Debug,
     {
-        let (sender, gcoderx) = mpsc::channel::<Bytes>(8);
+        let (sender, gcoderx) = mpsc::channel::<Box<[u8]>>(8);
         let (response_sender, responses) = broadcast::channel(64);
         let com_task = tokio::task::spawn(printer_com_task(port, gcoderx, response_sender));
         let serializer = Sequenced::default();
