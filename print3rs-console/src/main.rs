@@ -19,16 +19,16 @@ use tokio_serial::SerialPortBuilderExt;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use winnow::Parser;
 
-use print3rs_core::{Error as PrinterError, SerialPrinter as Printer};
+use print3rs_core::{AsyncPrinterComm, Error as PrinterError, SerialPrinter as Printer};
 
 fn connect_printer(
     printer: &Printer,
     writer: &SharedWriter,
     disconnect_notify: &mut Option<tokio::sync::oneshot::Receiver<()>>,
 ) -> Result<tokio::task::JoinHandle<()>, PrinterError> {
-    let mut printer_lines = printer.subscribe_lines();
+    let mut printer_lines = printer.subscribe_lines()?;
     let mut print_line_writer = writer.clone();
-    let abort_handle = printer.remote_disconnect();
+    let abort_handle = printer.remote_disconnect()?;
     let (disconnecttx, disconnectrx) = tokio::sync::oneshot::channel();
     *disconnect_notify = Some(disconnectrx);
     let background_comms = tokio::task::spawn(async move {
@@ -51,7 +51,7 @@ async fn start_print_file(
     let mut file = tokio::fs::File::open(filename).await?;
     let mut file_contents = String::new();
     file.read_to_string(&mut file_contents).await?;
-    let mut socket = printer.socket();
+    let mut socket = printer.socket()?;
     let task = tokio::spawn(async move {
         for line in file_contents.lines() {
             socket.send(line).await?.await?;
@@ -80,7 +80,7 @@ async fn start_logging(
         .await?;
 
     let mut parser = logging::parsing::make_parser(pattern);
-    let mut log_printer_reader = printer.subscribe_lines();
+    let mut log_printer_reader = printer.subscribe_lines()?;
     let log_task_handle = tokio::spawn(async move {
         while let Ok(log_line) = log_printer_reader.recv().await {
             if let Ok(parsed) = parser.parse(&log_line) {
@@ -106,7 +106,7 @@ async fn start_repeat(
     printer: &Printer,
 ) -> tokio::task::JoinHandle<eyre::Result<()>> {
     let gcodes: Vec<String> = gcodes.into_iter().map(|s| s.into_owned()).collect();
-    let mut socket = printer.socket();
+    let mut socket = printer.socket().expect("already checked connected");
 
     tokio::spawn(async move {
         for ref line in gcodes.into_iter().cycle() {
@@ -329,7 +329,7 @@ async fn main() -> eyre::Result<()> {
     let mut status = Status::Disconnected;
     let (mut readline, mut writer) = Readline::new(prompt_string(status))?;
 
-    let mut printer = Printer::new_disconnected();
+    let mut printer = Printer::Disconnected;
     let mut printer_reader = None;
     let mut disconnect_notify = None;
 

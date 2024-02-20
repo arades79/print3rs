@@ -275,10 +275,10 @@ impl<S> Printer<S> {
     }
 
     /// Obtain a socket to talk to printer
-    pub fn socket(&self) -> Option<Socket> {
+    pub fn socket(&self) -> Result<Socket, Error> {
         match self {
-            Self::Disconnected => None,
-            Self::Connected { socket, .. } => Some(socket.clone()),
+            Self::Disconnected => Err(Error::Disconnected),
+            Self::Connected { socket, .. } => Ok(socket.clone()),
         }
     }
 
@@ -295,10 +295,10 @@ impl<S> Printer<S> {
     }
 
     /// Get a handle to disconnect the printer from some background task
-    pub fn remote_disconnect(&self) -> Option<tokio::task::AbortHandle> {
+    pub fn remote_disconnect(&self) -> Result<tokio::task::AbortHandle, Error> {
         match self {
-            Printer::Disconnected => None,
-            Printer::Connected { com_task, .. } => Some(com_task.abort_handle()),
+            Printer::Disconnected => Err(Error::Disconnected),
+            Printer::Connected { com_task, .. } => Ok(com_task.abort_handle()),
         }
     }
 }
