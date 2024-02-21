@@ -51,7 +51,7 @@ async fn start_print_file(
     let mut file = tokio::fs::File::open(filename).await?;
     let mut file_contents = String::new();
     file.read_to_string(&mut file_contents).await?;
-    let mut socket = printer.socket()?;
+    let socket = printer.socket()?.clone();
     let task = tokio::spawn(async move {
         for line in file_contents.lines() {
             socket.send(line).await?.await?;
@@ -106,7 +106,7 @@ async fn start_repeat(
     printer: &Printer,
 ) -> tokio::task::JoinHandle<eyre::Result<()>> {
     let gcodes: Vec<String> = gcodes.into_iter().map(|s| s.into_owned()).collect();
-    let mut socket = printer.socket().expect("already checked connected");
+    let socket = printer.socket().expect("already checked connected").clone();
 
     tokio::spawn(async move {
         for ref line in gcodes.into_iter().cycle() {

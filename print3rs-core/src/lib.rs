@@ -35,7 +35,7 @@ pub trait AsyncPrinterComm {
     /// The handle to this task is returned after the first await on success.
     /// This allows simple synchronization of any sent command by awaiting twice.
     async fn send(
-        &mut self,
+        &self,
         gcode: impl Serialize + Debug,
     ) -> Result<tokio::task::JoinHandle<Response>, Error>;
 
@@ -109,7 +109,7 @@ impl AsyncPrinterComm for Socket {
     /// This allows simple synchronization of any sent command by awaiting twice.
     #[tracing::instrument(level = "debug", skip(self))]
     async fn send(
-        &mut self,
+        &self,
         gcode: impl Serialize + Debug,
     ) -> Result<tokio::task::JoinHandle<Response>, Error> {
         let send_slot = self.sender.reserve().await?;
@@ -274,17 +274,25 @@ impl<S> Printer<S> {
         *self = Printer::new(port);
     }
 
-    /// Obtain a socket to talk to printer
-    pub fn socket(&self) -> Result<Socket, Error> {
+    /// Obtain a cloneable socket handle to talk to printer
+    pub fn socket(&self) -> Result<&Socket, Error> {
         match self {
             Self::Disconnected => Err(Error::Disconnected),
-            Self::Connected { socket, .. } => Ok(socket.clone()),
+            Self::Connected { socket, .. } => Ok(socket),
+        }
+    }
+
+    /// Obtain an exclusive socket handle - needed to read
+    pub fn socket_mut(&mut self) -> Result<&mut Socket, Error> {
+        match self {
+            Self::Disconnected => Err(Error::Disconnected),
+            Self::Connected { socket, .. } => Ok(socket),
         }
     }
 
     /// Disconnect the printer and shutdown background communication
     pub fn disconnect(&mut self) {
-        *self = Self::Disconnected
+        core::mem::take(self);
     }
 
     pub fn is_connected(&self) -> bool {
@@ -306,41 +314,30 @@ impl<S> Printer<S> {
 #[sealed]
 impl<S> AsyncPrinterComm for Printer<S> {
     async fn send(
-        &mut self,
+        &self,
         gcode: impl Serialize + Debug,
     ) -> Result<tokio::task::JoinHandle<Response>, Error> {
-        match self {
-            Printer::Disconnected => Err(Error::Disconnected),
-            Printer::Connected { socket, .. } => socket.send(gcode).await,
-        }
+        let socket = self.socket()?;
+        socket.send(gcode).await
     }
 
     async fn send_unsequenced(&self, gcode: impl Serialize + Debug) -> Result<(), Error> {
-        match self {
-            Printer::Disconnected => Err(Error::Disconnected),
-            Printer::Connected { socket, .. } => socket.send_unsequenced(gcode).await,
-        }
+        let socket = self.socket()?;
+        socket.send_unsequenced(gcode).await
     }
 
     async fn send_raw(&self, gcode: &[u8]) -> Result<(), Error> {
-        match self {
-            Printer::Disconnected => Err(Error::Disconnected),
-            Printer::Connected { socket, .. } => socket.send_raw(gcode).await,
-        }
+        let socket = self.socket()?;
+        socket.send_raw(gcode).await
     }
 
     async fn read_next_line(&mut self) -> Result<Bytes, Error> {
-        match self {
-            Printer::Disconnected => Err(Error::Disconnected),
-            Printer::Connected { socket, .. } => socket.read_next_line().await,
-        }
+        let socket = self.socket_mut()?;
+        socket.read_next_line().await
     }
 
     fn subscribe_lines(&self) -> Result<LineStream, Error> {
-        if let Self::Connected { socket, .. } = self {
-            socket.subscribe_lines()
-        } else {
-            Err(Error::Disconnected)
-        }
+        let socket = self.socket()?;
+        socket.subscribe_lines()
     }
 }
