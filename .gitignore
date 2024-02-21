@@ -1,2 +1,4 @@
 /target
 /.xwin-cache
+/.devbox
+/.rustup
