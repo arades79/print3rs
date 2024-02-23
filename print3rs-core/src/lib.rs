@@ -13,7 +13,7 @@ use gcode_serializer::{serialize_unsequenced, Sequenced};
 
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
-    sync::{broadcast, mpsc},
+    sync::{broadcast, mpsc}, task::JoinHandle,
 };
 
 use sealed::sealed;
@@ -152,7 +152,7 @@ impl AsyncPrinterComm for Socket {
             match self.responses.recv().await {
                 Ok(line) => break Ok(line),
                 Err(broadcast::error::RecvError::Lagged(_)) => todo!(),
-                Err(e) => break Err(Error::from(e)),
+                Err(broadcast::error::RecvError::Closed) => break Err(Error::Disconnected),
             }
         }
     }
@@ -199,9 +199,6 @@ pub enum Error {
     #[error("Couldn't reserve a slot to send message\nError message: {0}")]
     SendReserve(#[from] mpsc::error::SendError<()>),
 
-    #[error("Couldn't retreive data from background task\nError message: {0}")]
-    ResponseReceiver(#[from] broadcast::error::RecvError),
-
     #[error("Underlying printer connection was closed")]
     Disconnected,
 }
@@ -227,7 +224,7 @@ async fn printer_com_task(
                 };
                 tracing::debug!("Sent `{}` to printer", String::from_utf8_lossy(&line).trim());
             },
-            Ok(_) = transport.read_buf(&mut buf) => {
+            Ok(1..) = transport.read_buf(&mut buf) => {
                 while let Some(n) = buf.iter().position(|b| *b == b'\n') {
                     let line = buf.split_to(n + 1).freeze();
                     tracing::debug!("Received `{}` from printer", String::from_utf8_lossy(&line).trim());
@@ -302,11 +299,10 @@ impl<S> Printer<S> {
         }
     }
 
-    /// Get a handle to disconnect the printer from some background task
-    pub fn remote_disconnect(&self) -> Result<tokio::task::AbortHandle, Error> {
+    pub fn background_task(&self) -> Option<&JoinHandle<()>> {
         match self {
-            Printer::Disconnected => Err(Error::Disconnected),
-            Printer::Connected { com_task, .. } => Ok(com_task.abort_handle()),
+            Printer::Disconnected => None,
+            Printer::Connected {com_task, ..} => Some(com_task),
         }
     }
 }
@@ -333,7 +329,7 @@ impl<S> AsyncPrinterComm for Printer<S> {
 
     async fn read_next_line(&mut self) -> Result<Bytes, Error> {
         let socket = self.socket_mut()?;
-        socket.read_next_line().await
+        socket.read_next_line().await.inspect_err(|e| if let Error::Disconnected = e {self.disconnect()})
     }
 
     fn subscribe_lines(&self) -> Result<LineStream, Error> {
