@@ -5,307 +5,76 @@
 mod commands;
 mod logging;
 
-use std::{
-    borrow::Cow,
-    collections::HashMap,
-    fmt::{Debug, Display},
-};
+use std::{collections::HashMap, fmt::Debug, time::Duration};
 
-use commands::{auto_connect, help, version};
 use futures_util::AsyncWriteExt;
 use rustyline_async::{Readline, ReadlineEvent, SharedWriter};
-use tokio::io::{AsyncReadExt, AsyncWriteExt as TokioAsyncWrite};
-use tokio_serial::SerialPortBuilderExt;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use winnow::Parser;
 
-use print3rs_core::{AsyncPrinterComm, Error as PrinterError, SerialPrinter as Printer};
+use print3rs_core::{AsyncPrinterComm, SerialPrinter as Printer};
 
-fn connect_printer(
-    printer: &Printer,
-    writer: &SharedWriter,
-    disconnect_notify: &mut Option<tokio::sync::oneshot::Receiver<()>>,
-) -> Result<tokio::task::JoinHandle<()>, PrinterError> {
-    let mut printer_lines = printer.subscribe_lines()?;
-    let mut print_line_writer = writer.clone();
-    let abort_handle = printer.remote_disconnect()?;
-    let (disconnecttx, disconnectrx) = tokio::sync::oneshot::channel();
-    *disconnect_notify = Some(disconnectrx);
-    let background_comms = tokio::task::spawn(async move {
-        while let Ok(line) = printer_lines.recv().await {
-            match print_line_writer.write_all(&line).await {
-                Ok(_) => continue,
-                Err(_) => break,
-            }
+struct AppState {
+    printer: Printer,
+    writer: tokio::sync::mpsc::UnboundedSender<String>,
+    tasks: HashMap<String, commands::BackgroundTask>,
+    error_sender: tokio::sync::mpsc::Sender<AppError>,
+}
+
+#[derive(Debug, thiserror::Error)]
+enum AppError {
+    #[error("Printer error: {0}")]
+    Printer(#[from] print3rs_core::Error),
+    #[error("Connection error: {0}")]
+    Connection(#[from] tokio_serial::Error),
+    #[error("Console error: {0}")]
+    Readline(#[from] rustyline_async::ReadlineError),
+    #[error("Can't write to console")]
+    Writer(#[from] futures_util::io::Error),
+}
+
+impl commands::HandleCommand for AppState {
+    type Error = AppError;
+
+    fn printer(&self) -> &Printer {
+        &self.printer
+    }
+
+    fn printer_mut(&mut self) -> &mut Printer {
+        &mut self.printer
+    }
+
+    fn on_connect(&mut self) {}
+
+    fn respond(&self, message: &str) {
+        self.writer.send(message.to_owned()).expect("main exited")
+    }
+
+    fn error(&self, err: Self::Error) {
+        self.error_sender.try_send(err).expect("too many errors");
+    }
+
+    fn add_task(&mut self, task_name: &str, task: commands::BackgroundTask) {
+        self.tasks.insert(task_name.to_owned(), task);
+    }
+
+    fn remove_task(&mut self, task_name: &str) {
+        if let Some(task) = self.tasks.remove(task_name) {
+            task.abort_handle.abort();
         }
-        abort_handle.abort();
-        disconnecttx.send(()).unwrap_or_default();
-    });
-    Ok(background_comms)
-}
+    }
 
-async fn start_print_file(
-    filename: &str,
-    printer: &Printer,
-) -> Result<tokio::task::JoinHandle<eyre::Result<()>>, PrinterError> {
-    let mut file = tokio::fs::File::open(filename).await?;
-    let mut file_contents = String::new();
-    file.read_to_string(&mut file_contents).await?;
-    let socket = printer.socket()?.clone();
-    let task = tokio::spawn(async move {
-        for line in file_contents.lines() {
-            socket.send(line).await?.await?;
-        }
-        Ok(())
-    });
-    Ok(task)
-}
-
-async fn start_logging(
-    name: &str,
-    pattern: Vec<logging::parsing::Segment<'_>>,
-    printer: &Printer,
-) -> Result<tokio::task::JoinHandle<()>, PrinterError> {
-    let mut log_file = tokio::fs::File::create(format!(
-        "{name}_{timestamp}.csv",
-        timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs()
-    ))
-    .await?;
-
-    log_file
-        .write_all(logging::parsing::get_headers(&pattern).as_bytes())
-        .await?;
-
-    let mut parser = logging::parsing::make_parser(pattern);
-    let mut log_printer_reader = printer.subscribe_lines()?;
-    let log_task_handle = tokio::spawn(async move {
-        while let Ok(log_line) = log_printer_reader.recv().await {
-            if let Ok(parsed) = parser.parse(&log_line) {
-                let mut record_bytes = String::new();
-                for val in parsed {
-                    record_bytes.push_str(&val.to_string());
-                    record_bytes.push(',');
-                }
-                record_bytes.pop(); // remove trailing ','
-                record_bytes.push('\n');
-                log_file
-                    .write_all(record_bytes.as_bytes())
-                    .await
-                    .unwrap_or_default();
-            }
-        }
-    });
-    Ok(log_task_handle)
-}
-
-async fn start_repeat(
-    gcodes: Vec<Cow<'_, str>>,
-    printer: &Printer,
-) -> tokio::task::JoinHandle<eyre::Result<()>> {
-    let gcodes: Vec<String> = gcodes.into_iter().map(|s| s.into_owned()).collect();
-    let socket = printer.socket().expect("already checked connected").clone();
-
-    tokio::spawn(async move {
-        for ref line in gcodes.into_iter().cycle() {
-            socket.send(line).await?.await?;
-        }
-        Ok(())
-    })
-}
-
-struct BackgroundTask {
-    description: &'static str,
-    abort_handle: tokio::task::AbortHandle,
-}
-
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
-enum Status {
-    Disconnected,
-    Connected,
-}
-
-impl Display for Status {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            Status::Disconnected => "disconnected",
-            Status::Connected => "connected",
-        })
+    fn task_iter(&self) -> impl Iterator<Item = (&String, &commands::BackgroundTask)> {
+        self.tasks.iter()
     }
 }
 
-fn prompt_string(status: Status) -> String {
-    format!("[{status}]> ")
-}
-
-fn disconnect(
-    printer: &mut Printer,
-    printer_reader: &mut Option<tokio::task::JoinHandle<()>>,
-    background_tasks: &mut HashMap<String, BackgroundTask>,
-    status: &mut Status,
-) {
-    printer.disconnect();
-    if let Some(handle) = printer_reader.take() {
-        handle.abort()
-    }
-    background_tasks.clear();
-    *status = Status::Disconnected;
-}
-
-async fn not_connected(writer: &mut SharedWriter) -> Result<(), rustyline_async::ReadlineError> {
-    const ERR_NO_PRINTER: &[u8] = b"Printer not connected! Use ':help' for help connecting.\n";
-    writer.write_all(ERR_NO_PRINTER).await?;
-    Ok(())
-}
-
-async fn handle_command(
-    command: commands::Command<'_>,
-    printer: &mut Printer,
-    writer: &mut SharedWriter,
-    status: &mut Status,
-    background_tasks: &mut HashMap<String, BackgroundTask>,
-    printer_reader: &mut Option<tokio::task::JoinHandle<()>>,
-    disconnect_notify: &mut Option<tokio::sync::oneshot::Receiver<()>>,
-) -> eyre::Result<()> {
-    use commands::Command::*;
-    match command {
-        Gcodes(gcodes) => {
-            if *status == Status::Disconnected {
-                not_connected(writer).await?;
-                return Ok(());
-            } else {
-                for line in gcodes {
-                    match printer.send_unsequenced(line).await {
-                        Ok(_) => (),
-                        Err(e) => {
-                            tracing::error!("{e}");
-                            disconnect(printer, printer_reader, background_tasks, status)
-                        }
-                    };
-                }
-            }
-        }
-        Log(name, pattern) => {
-            if *status == Status::Disconnected {
-                not_connected(writer).await?;
-                return Ok(());
-            }
-            match start_logging(name, pattern, printer).await {
-                Ok(log_task_handle) => {
-                    background_tasks.insert(
-                        name.to_owned(),
-                        BackgroundTask {
-                            description: "log",
-                            abort_handle: log_task_handle.abort_handle(),
-                        },
-                    );
-                }
-                Err(e) => {
-                    writer.write_all(e.to_string().as_bytes()).await?;
-                }
-            };
-        }
-        Repeat(name, gcodes) => {
-            if *status == Status::Disconnected {
-                not_connected(writer).await?;
-                return Ok(());
-            }
-            let repeat_task = start_repeat(gcodes, printer).await;
-
-            background_tasks.insert(
-                name.to_owned(),
-                BackgroundTask {
-                    description: "repeat",
-                    abort_handle: repeat_task.abort_handle(),
-                },
-            );
-        }
-        Connect(path, baud) => {
-            match tokio_serial::new(path, baud.unwrap_or(115200)).open_native_async() {
-                Ok(serial) => {
-                    printer.connect(serial);
-                    *printer_reader = Some(connect_printer(printer, writer, disconnect_notify)?);
-                    *status = Status::Connected;
-                }
-                Err(e) => {
-                    writer
-                        .write_all(format!("Connection failed!\nError: {e}\n").as_bytes())
-                        .await?;
-                }
-            };
-        }
-        AutoConnect => {
-            writer.write_all(b"Connecting...\n").await?;
-            let msg = match auto_connect().await {
-                Some(new_printer) => {
-                    *printer = new_printer;
-                    *printer_reader = Some(connect_printer(printer, writer, disconnect_notify)?);
-                    *status = Status::Connected;
-                    "Found printer!\n".as_bytes()
-                }
-                None => "Printer not found.\n".as_bytes(),
-            };
-            writer.write_all(msg).await?;
-        }
-        Disconnect => {
-            disconnect(printer, printer_reader, background_tasks, status);
-        }
-        Help(sub) => help(writer, sub).await,
-        Version => version(writer).await,
-        Unrecognized => {
-            writer
-                .write_all(
-                    "Invalid command! use ':help' for valid commands and syntax\n".as_bytes(),
-                )
-                .await?;
-        }
-        Tasks => {
-            if background_tasks.is_empty() {
-                writer.write_all(b"No active tasks.\n").await?;
-            } else {
-                for (
-                    name,
-                    BackgroundTask {
-                        description,
-                        abort_handle: _,
-                    },
-                ) in background_tasks.iter()
-                {
-                    writer
-                        .write_all(format!("{name}\t{description}\n").as_bytes())
-                        .await?;
-                }
-            };
-        }
-        Stop(label) => {
-            if let Some(task_handle) = background_tasks.remove(label) {
-                task_handle.abort_handle.abort();
-            } else {
-                writer
-                    .write_all(format!("No task named {label} running\n").as_bytes())
-                    .await?;
-            }
-        }
-        Print(filename) => match start_print_file(filename, printer).await {
-            Ok(print_task) => {
-                background_tasks.insert(
-                    filename.to_owned(),
-                    BackgroundTask {
-                        description: "print",
-                        abort_handle: print_task.abort_handle(),
-                    },
-                );
-            }
-            Err(e) => {
-                writer.write_all(e.to_string().as_bytes()).await?;
-            }
-        },
-        Clear => (), // needs external handling
-        Quit => (),  // needs external handling
+fn prompt_string(printer: &Printer) -> String {
+    let status = match printer {
+        print3rs_core::Printer::Disconnected => "Disconnected",
+        print3rs_core::Printer::Connected { .. } => "Connected",
     };
-    Ok(())
+    format!("[{status}]> ")
 }
 
 fn setup_logging(writer: SharedWriter) {
@@ -325,24 +94,52 @@ fn setup_logging(writer: SharedWriter) {
 }
 
 #[tokio::main(flavor = "current_thread")]
-async fn main() -> eyre::Result<()> {
-    let mut status = Status::Disconnected;
-    let (mut readline, mut writer) = Readline::new(prompt_string(status))?;
+async fn main() -> Result<(), AppError> {
+    let printer = Printer::default();
 
-    let mut printer = Printer::Disconnected;
-    let mut printer_reader = None;
-    let mut disconnect_notify = None;
+    let (mut readline, mut writer) = Readline::new(prompt_string(&printer))?;
 
-    let mut background_tasks = HashMap::new();
-    commands::version(&mut writer).await;
+    let (error_sender, mut error_receiver) = tokio::sync::mpsc::channel(8);
+
+    writer.write_all(commands::version().as_bytes()).await?;
     writer
-        .write_all(b"type `:help` for a list of commands\n")
+        .write_all(b"\ntype `:help` for a list of commands\n")
         .await?;
-
     setup_logging(writer.clone());
 
+    let (response_sender, mut response_receiver) = tokio::sync::mpsc::unbounded_channel();
+
+    let mut app = AppState {
+        printer,
+        writer: response_sender.clone(),
+        tasks: HashMap::new(),
+        error_sender,
+    };
     loop {
-        tokio::select! { Ok(ReadlineEvent::Line(line)) = readline.readline() => {
+        tokio::select! {
+            Ok(response) = app.printer.read_next_line() => {
+                writer.write_all(&response).await?;
+            },
+            Some(error) = error_receiver.recv() => {
+                match error {
+                    AppError::Printer(_) => {
+                        app.printer.disconnect();
+                        writer.write_all(b"Printer is disconnected!\n").await?;
+                    },
+                    AppError::Connection(_) => {
+                        writer.write_all(b"Connection failed!\n").await?;
+                    },
+                    _ => {readline.flush()?; return Ok(());},
+                }
+            }
+            Some(message) = response_receiver.recv() => {
+                writer.write_all(message.as_bytes()).await?;
+            },
+            Ok(event) = readline.readline() => {
+                let line = match event {
+                    ReadlineEvent::Line(line) => line,
+                    _ => {readline.flush()?; return Ok(());}
+                };
                 let command = match commands::parse_command.parse(&line) {
                     Ok(command) => command,
                     Err(_) => {
@@ -354,25 +151,13 @@ async fn main() -> eyre::Result<()> {
                     commands::Command::Clear => readline.clear()?,
                     commands::Command::Quit => {readline.flush()?; return Ok(());},
                     other => {
-                        handle_command(
-                            other,
-                            &mut printer,
-                            &mut writer,
-                            &mut status,
-                            &mut background_tasks,
-                            &mut printer_reader,
-                            &mut disconnect_notify,
-                        )
-                        .await?
+                        commands::handle_command(&mut app, other).await;
                     }
                 }
                 readline.add_history_entry(line);
             },
-            Ok(_) = &mut disconnect_notify.take().unwrap_or_else(|| {let (_tx, rx) = tokio::sync::oneshot::channel(); rx}), if disconnect_notify.is_some() => {
-                disconnect(&mut printer, &mut printer_reader, &mut background_tasks, &mut status);
-            },
-            else => {readline.flush()?; return Ok(());}
+            
         }
-        readline.update_prompt(&prompt_string(status))?;
+        readline.update_prompt(&prompt_string(&app.printer))?;
     }
 }

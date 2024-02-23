@@ -1,6 +1,5 @@
 use std::{borrow::Cow, time::Duration};
 
-use futures_util::AsyncWriteExt;
 use winnow::{
     ascii::{alpha1, alphanumeric1, dec_uint, space0, space1},
     combinator::{alt, dispatch, empty, fail, opt, preceded, rest, separated},
@@ -8,9 +7,13 @@ use winnow::{
     token::take_till,
 };
 
-use tokio::time::timeout;
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    task::JoinHandle,
+    time::timeout,
+};
 
-use print3rs_core::{AsyncPrinterComm, SerialPrinter};
+use print3rs_core::{AsyncPrinterComm, Error as PrinterError, Printer, SerialPrinter};
 use tokio_serial::{available_ports, SerialPort, SerialPortBuilderExt, SerialPortInfo};
 
 async fn check_port(port: SerialPortInfo) -> Option<SerialPrinter> {
@@ -50,22 +53,12 @@ pub async fn auto_connect() -> Option<SerialPrinter> {
     None
 }
 
-pub async fn version(writer: &mut rustyline_async::SharedWriter) {
+pub fn version() -> &'static str {
     const VERSION: Option<&str> = option_env!("CARGO_PKG_VERSION");
-
-    writer
-        .write_all(
-            format!(
-                "print3rs-console version {ver}\n",
-                ver = VERSION.unwrap_or("???")
-            )
-            .as_bytes(),
-        )
-        .await
-        .unwrap_or(());
+    VERSION.unwrap_or("???")
 }
 
-static FULL_HELP: &[u8] = b"    
+static FULL_HELP: &str = "    
 Anything entered not matching one of the following commands is uppercased and sent to
 the printer for it to interpret.
 
@@ -92,20 +85,19 @@ disconnect                    disconnect from printer
 quit                          exit program
 \n";
 
-pub async fn help(writer: &mut rustyline_async::SharedWriter, command: &str) {
+pub fn help(command: &str) -> &'static str {
     let command = command.trim().strip_prefix(':').unwrap_or(command.trim());
-    let msg: &[u8] = match command {
-        "send" => b"send: explicitly send one or more commands (separated by gcode comment character `;`) commands to the printer, no uppercasing or additional parsing is performed. This can be used to send commands to the printer that would otherwise be detected as a console command.\n",
-        "print" => b"print: execute every line of G-code sequentially from the given file. The print job is added as a task which runs in the background with the filename as the task name. Other commands can be sent while a print is running, and a print can be stopped at any time with `stop`\n",
-        "log" => b"log: begin logging the specified pattern from the printer into a csv with the `name` given. This operation runs in the background and is added as a task which can be stopped with `stop`. The pattern given will be used to parse the logs, with values wrapped in `{}` being given a column of whatever is between the `{}`, and pulling a number in its place. If your pattern needs to include a literal `{` or `}`, double them up like `{{` or `}}` to have the parser read it as just a `{` or `}` in the output.\n",
-        "repeat" => b"repeat: repeat the given Gcodes (separated by gcode comment character `;`) in a loop until stopped. \n",
-        "stop" => b"stop: stops a task running in the background. All background tasks are required to have a name, thus this command can be used to stop them. Tasks can also stop themselves if they fail or can complete, after which running this will do nothing.\n",
-        "connect" => b"connect: Manually connect to a printer by specifying its path and optionally its baudrate. On windows this looks like `connect COM3 115200`, on linux more like `connect /dev/tty/ACM0 250000`. This does not test if the printer is capable of responding to messages, it will only open the port.\n",
-        "autoconnect" => b"autoconnect: On some supported printer firmwares, this will automatically detect a connected printer and verify that it's capable of receiving and responding to commands. This is done with an `M115` command sent to the device, and waiting at most 5 seconds for an `ok` response. If your printer does not support this command, this will not work and you will need manual connection.\n",
-        "disconnect" => b"disconnect: disconnect from the currently connected printer. All active tasks will be stopped\n",
+    match command {
+        "send" => "send: explicitly send one or more commands (separated by gcode comment character `;`) commands to the printer, no uppercasing or additional parsing is performed. This can be used to send commands to the printer that would otherwise be detected as a console command.\n",
+        "print" => "print: execute every line of G-code sequentially from the given file. The print job is added as a task which runs in the background with the filename as the task name. Other commands can be sent while a print is running, and a print can be stopped at any time with `stop`\n",
+        "log" => "log: begin logging the specified pattern from the printer into a csv with the `name` given. This operation runs in the background and is added as a task which can be stopped with `stop`. The pattern given will be used to parse the logs, with values wrapped in `{}` being given a column of whatever is between the `{}`, and pulling a number in its place. If your pattern needs to include a literal `{` or `}`, double them up like `{{` or `}}` to have the parser read it as just a `{` or `}` in the output.\n",
+        "repeat" => "repeat: repeat the given Gcodes (separated by gcode comment character `;`) in a loop until stopped. \n",
+        "stop" => "stop: stops a task running in the background. All background tasks are required to have a name, thus this command can be used to stop them. Tasks can also stop themselves if they fail or can complete, after which running this will do nothing.\n",
+        "connect" => "connect: Manually connect to a printer by specifying its path and optionally its baudrate. On windows this looks like `connect COM3 115200`, on linux more like `connect /dev/tty/ACM0 250000`. This does not test if the printer is capable of responding to messages, it will only open the port.\n",
+        "autoconnect" => "autoconnect: On some supported printer firmwares, this will automatically detect a connected printer and verify that it's capable of receiving and responding to commands. This is done with an `M115` command sent to the device, and waiting at most 5 seconds for an `ok` response. If your printer does not support this command, this will not work and you will need manual connection.\n",
+        "disconnect" => "disconnect: disconnect from the currently connected printer. All active tasks will be stopped\n",
         _ => FULL_HELP,
-    };
-    writer.write_all(msg).await.unwrap_or_default();
+    }
 }
 
 use crate::logging::parsing::{parse_logger, Segment};
@@ -179,4 +171,201 @@ pub fn parse_command<'a>(input: &mut &'a str) -> PResult<Command<'a>> {
         }),
     ))
     .parse_next(input)
+}
+
+async fn start_print_file<Transport>(
+    filename: &str,
+    printer: &Printer<Transport>,
+) -> Result<tokio::task::AbortHandle, PrinterError> {
+    let mut file = tokio::fs::File::open(filename).await?;
+    let mut file_contents = String::new();
+    file.read_to_string(&mut file_contents).await?;
+    let socket = printer.socket()?.clone();
+    let task: JoinHandle<Result<(), TaskError>> = tokio::spawn(async move {
+        for line in file_contents.lines() {
+            socket.send(line).await?.await?;
+        }
+        Ok(())
+    });
+    Ok(task.abort_handle())
+}
+
+#[derive(Debug, thiserror::Error)]
+enum TaskError {
+    #[error("{0}")]
+    Printer(#[from] print3rs_core::Error),
+    #[error("failed in background: {0}")]
+    Join(#[from] tokio::task::JoinError),
+}
+
+async fn start_logging<Transport>(
+    name: &str,
+    pattern: Vec<crate::logging::parsing::Segment<'_>>,
+    printer: &Printer<Transport>,
+) -> Result<tokio::task::AbortHandle, PrinterError> {
+    let mut log_file = tokio::fs::File::create(format!(
+        "{name}_{timestamp}.csv",
+        timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+    ))
+    .await?;
+
+    log_file
+        .write_all(crate::logging::parsing::get_headers(&pattern).as_bytes())
+        .await?;
+
+    let mut parser = crate::logging::parsing::make_parser(pattern);
+    let mut log_printer_reader = printer.subscribe_lines()?;
+    let log_task_handle = tokio::spawn(async move {
+        while let Ok(log_line) = log_printer_reader.recv().await {
+            if let Ok(parsed) = parser.parse(&log_line) {
+                let mut record_bytes = String::new();
+                for val in parsed {
+                    record_bytes.push_str(&val.to_string());
+                    record_bytes.push(',');
+                }
+                record_bytes.pop(); // remove trailing ','
+                record_bytes.push('\n');
+                log_file
+                    .write_all(record_bytes.as_bytes())
+                    .await
+                    .unwrap_or_default();
+            }
+        }
+    });
+    Ok(log_task_handle.abort_handle())
+}
+
+async fn start_repeat<S>(
+    gcodes: Vec<Cow<'_, str>>,
+    printer: &Printer<S>,
+) -> tokio::task::AbortHandle {
+    let gcodes: Vec<String> = gcodes.into_iter().map(|s| s.into_owned()).collect();
+    let socket = printer.socket().expect("already checked connected").clone();
+
+    let task: JoinHandle<Result<(), TaskError>> = tokio::spawn(async move {
+        for ref line in gcodes.into_iter().cycle() {
+            socket.send(line).await?.await?;
+        }
+        Ok(())
+    });
+    task.abort_handle()
+}
+
+pub struct BackgroundTask {
+    pub description: &'static str,
+    pub abort_handle: tokio::task::AbortHandle,
+}
+
+pub trait HandleCommand {
+    type Error: From<PrinterError> + From<tokio_serial::Error>;
+    fn printer(&self) -> &SerialPrinter;
+    fn printer_mut(&mut self) -> &mut SerialPrinter;
+    fn on_connect(&mut self);
+    fn respond(&self, message: &str);
+    fn error(&self, err: Self::Error);
+    fn add_task(&mut self, task_name: &str, task: BackgroundTask);
+    fn remove_task(&mut self, task_name: &str);
+    fn task_iter(&self) -> impl Iterator<Item = (&String, &BackgroundTask)>;
+}
+
+pub async fn handle_command(handler: &mut impl HandleCommand, command: Command<'_>) {
+    use Command::*;
+    match command {
+        Gcodes(gcodes) => {
+            for line in gcodes {
+                let _ = handler
+                    .printer()
+                    .send_unsequenced(line)
+                    .await
+                    .map_err(|e| handler.error(e.into()));
+            }
+        }
+        Log(name, pattern) => {
+            match start_logging(name, pattern, handler.printer()).await {
+                Ok(log_task_handle) => {
+                    handler.add_task(
+                        name,
+                        BackgroundTask {
+                            description: "log",
+                            abort_handle: log_task_handle,
+                        },
+                    );
+                }
+                Err(e) => handler.error(e.into()),
+            };
+        }
+        Repeat(name, gcodes) => {
+            let repeat_task = start_repeat(gcodes, handler.printer()).await;
+
+            handler.add_task(
+                name,
+                BackgroundTask {
+                    description: "repeat",
+                    abort_handle: repeat_task,
+                },
+            );
+        }
+        Connect(path, baud) => {
+            match tokio_serial::new(path, baud.unwrap_or(115200)).open_native_async() {
+                Ok(port) => {
+                    handler.printer_mut().connect(port);
+                    handler.on_connect();
+                }
+                Err(e) => handler.error(e.into()),
+            };
+        }
+        AutoConnect => {
+            handler.respond("Connecting...\n");
+            match auto_connect().await {
+                Some(new_printer) => {
+                    *handler.printer_mut() = new_printer;
+                    handler.on_connect();
+                    handler.respond("Found printer!\n");
+                }
+                None => {
+                    handler.respond("Printer not found.\n");
+                }
+            };
+        }
+        Disconnect => {
+            handler.printer_mut().disconnect();
+        }
+        Help(sub) => handler.respond(help(sub)),
+        Version => handler.respond(version()),
+        Unrecognized => {
+            handler.respond("Invalid command! use ':help' for valid commands and syntax\n");
+        }
+        Tasks => {
+            for (
+                name,
+                BackgroundTask {
+                    description,
+                    abort_handle: _,
+                },
+            ) in handler.task_iter()
+            {
+                handler.respond(format!("{name}\t{description}\n").as_str());
+            }
+        }
+        Stop(label) => handler.remove_task(label),
+        Print(filename) => match start_print_file(filename, handler.printer()).await {
+            Ok(print_task) => {
+                handler.add_task(
+                    filename,
+                    BackgroundTask {
+                        description: "print",
+                        abort_handle: print_task,
+                    },
+                );
+            }
+            Err(e) => {
+                handler.error(e.into());
+            }
+        },
+        Clear => (), // needs external handling
+        Quit => (),  // needs external handling
+    };
 }
