@@ -1956,11 +1956,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e8cf8e6a8aa66ce33f63993ffc4ea4271eb5b0530a9002db8455ea6050c77bfa"
 
 [[package]]
-name = "print3rs-console"
+name = "print3rs"
 version = "0.1.0"
 dependencies = [
  "futures-util",
  "gcode-serializer",
+ "iced",
  "print3rs-core",
  "rustyline-async",
  "thiserror",
@@ -1984,16 +1985,6 @@ dependencies = [
  "tokio-serial",
  "tracing",
  "winnow 0.6.0",
-]
-
-[[package]]
-name = "print3rs-gui"
-version = "0.1.0"
-dependencies = [
- "gcode-serializer",
- "iced",
- "print3rs-core",
- "tokio-serial",
 ]
 
 [[package]]
