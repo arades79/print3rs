@@ -1049,9 +1049,9 @@ checksum = "dfa686283ad6dd069f105e5ab091b04c62850d3e4cf5d67debad1933f55023df"
 
 [[package]]
 name = "iced"
-version = "0.12.0"
+version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c4201d43f7b74e6024a52bc20f4d742a44760685474b07c14680a6293c861644"
+checksum = "7d4eb0fbbefb8c428b70680e77ed9013887b17c1d6be366b40f264f956d1a096"
 dependencies = [
  "iced_core",
  "iced_futures",
@@ -1095,9 +1095,9 @@ dependencies = [
 
 [[package]]
 name = "iced_graphics"
-version = "0.12.0"
+version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0660df444c64a13f72999c55a324f6d3ea020167bb1af8ef43fe2bff168d8c27"
+checksum = "6a044c193ef0840eacabfa05424717331d1fc5b3ecb9a89316200c75da2ba9a4"
 dependencies = [
  "bitflags 2.4.2",
  "bytemuck",
@@ -1116,9 +1116,9 @@ dependencies = [
 
 [[package]]
 name = "iced_renderer"
-version = "0.12.0"
+version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "59d931249515deb5fe116c7d199792cd9fd32d31bf18ffc08c6c2ad2dee5fd3e"
+checksum = "5c281e03001d566058f53dec9325bbe61c62da715341206d2627f57a3ecc7f69"
 dependencies = [
  "iced_graphics",
  "iced_tiny_skia",
@@ -1956,12 +1956,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e8cf8e6a8aa66ce33f63993ffc4ea4271eb5b0530a9002db8455ea6050c77bfa"
 
 [[package]]
-name = "print3rs"
+name = "print3rs-commands"
 version = "0.1.0"
 dependencies = [
  "futures-util",
  "gcode-serializer",
- "iced",
+ "print3rs-core",
+ "thiserror",
+ "tokio",
+ "tokio-serial",
+ "tracing",
+ "tracing-subscriber",
+ "winnow 0.6.0",
+]
+
+[[package]]
+name = "print3rs-console"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "gcode-serializer",
+ "print3rs-commands",
  "print3rs-core",
  "rustyline-async",
  "thiserror",
@@ -1985,6 +2000,17 @@ dependencies = [
  "tokio-serial",
  "tracing",
  "winnow 0.6.0",
+]
+
+[[package]]
+name = "print3rs-gui"
+version = "0.1.0"
+dependencies = [
+ "gcode-serializer",
+ "iced",
+ "print3rs-commands",
+ "print3rs-core",
+ "tokio-serial",
 ]
 
 [[package]]

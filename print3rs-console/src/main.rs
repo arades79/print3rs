@@ -2,10 +2,7 @@
 //!  A shell to talk to 3D printers or other Gcode accepting serial devices, inspired by Pronsole
 //!
 
-mod commands;
-mod logging;
-
-use std::{collections::HashMap, fmt::Debug, time::Duration};
+use std::{collections::HashMap, fmt::Debug};
 
 use futures_util::AsyncWriteExt;
 use rustyline_async::{Readline, ReadlineEvent, SharedWriter};
@@ -13,6 +10,8 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use winnow::Parser;
 
 use print3rs_core::{AsyncPrinterComm, SerialPrinter as Printer};
+
+use print3rs_commands::commands;
 
 struct AppState {
     printer: Printer,
@@ -156,7 +155,7 @@ async fn main() -> Result<(), AppError> {
                 }
                 readline.add_history_entry(line);
             },
-            
+
         }
         readline.update_prompt(&prompt_string(&app.printer))?;
     }

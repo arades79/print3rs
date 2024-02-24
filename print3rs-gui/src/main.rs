@@ -1,10 +1,11 @@
 use iced::widget::{button, column, combo_box, row, text_input};
 use iced::{Application, Command};
+use print3rs_core::AsyncPrinterComm;
 use tokio_serial::SerialPortBuilderExt;
 
 #[derive(Debug)]
 struct App {
-    printer: print3rs_core::Printer,
+    printer: print3rs_core::SerialPrinter,
     printer_path: String,
     printer_baud: u32,
     temperature: f32,
@@ -61,7 +62,7 @@ impl iced::Application for App {
     fn new(_flags: Self::Flags) -> (Self, iced::Command<Self::Message>) {
         (
             Self {
-                printer: print3rs_core::Printer::new_disconnected(),
+                printer: print3rs_core::Printer::default(),
                 printer_path: String::new(),
                 printer_baud: 115200,
                 temperature: 0.0,
@@ -77,11 +78,13 @@ impl iced::Application for App {
     fn update(&mut self, message: Self::Message) -> iced::Command<Self::Message> {
         match message {
             Message::Jog(JogMove { x, y, z }) => {
-                let socket = self.printer.socket();
-                Command::perform(
-                    async move { socket.send_unsequenced(format!("G7X{x}Y{y}Z{z}")).await },
-                    |_| Message::GcodeFinish,
-                )
+                if let Ok(socket) = self.printer.socket() {
+                    let socket = socket.clone();
+                    Command::perform(
+                        async move { socket.send_unsequenced(format!("G7X{x}Y{y}Z{z}")).await },
+                        |_| Message::GcodeFinish,
+                    )
+                } else {Command::none()}
             }
             Message::Autoconnect => Command::none(),
             Message::ConnectTextInput(s) => {
