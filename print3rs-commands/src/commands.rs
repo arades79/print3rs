@@ -254,6 +254,7 @@ async fn start_repeat<S>(
     task.abort_handle()
 }
 
+#[derive(Debug)]
 pub struct BackgroundTask {
     pub description: &'static str,
     pub abort_handle: tokio::task::AbortHandle,
