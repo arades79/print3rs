@@ -2,23 +2,19 @@
 //!  A shell to talk to 3D printers or other Gcode accepting serial devices, inspired by Pronsole
 //!
 
-use std::{collections::HashMap, fmt::Debug};
+use {
+    print3rs_commands::commands::{start_repeat, BackgroundTask},
+    print3rs_core::{AsyncPrinterComm, Printer, SerialPrinter},
+    std::{collections::HashMap, fmt::Debug},
+    tokio_serial::SerialPortBuilderExt,
+};
 
 use futures_util::AsyncWriteExt;
 use rustyline_async::{Readline, ReadlineEvent, SharedWriter};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use winnow::Parser;
 
-use print3rs_core::{AsyncPrinterComm, SerialPrinter as Printer};
-
 use print3rs_commands::commands;
-
-struct AppState {
-    printer: Printer,
-    writer: tokio::sync::mpsc::UnboundedSender<String>,
-    tasks: HashMap<String, commands::BackgroundTask>,
-    error_sender: tokio::sync::mpsc::Sender<AppError>,
-}
 
 #[derive(Debug, thiserror::Error)]
 enum AppError {
@@ -32,43 +28,7 @@ enum AppError {
     Writer(#[from] futures_util::io::Error),
 }
 
-impl commands::HandleCommand for AppState {
-    type Error = AppError;
-
-    fn printer(&self) -> &Printer {
-        &self.printer
-    }
-
-    fn printer_mut(&mut self) -> &mut Printer {
-        &mut self.printer
-    }
-
-    fn on_connect(&mut self) {}
-
-    fn respond(&self, message: &str) {
-        self.writer.send(message.to_owned()).expect("main exited")
-    }
-
-    fn error(&self, err: Self::Error) {
-        self.error_sender.try_send(err).expect("too many errors");
-    }
-
-    fn add_task(&mut self, task_name: &str, task: commands::BackgroundTask) {
-        self.tasks.insert(task_name.to_owned(), task);
-    }
-
-    fn remove_task(&mut self, task_name: &str) {
-        if let Some(task) = self.tasks.remove(task_name) {
-            task.abort_handle.abort();
-        }
-    }
-
-    fn task_iter(&self) -> impl Iterator<Item = (&String, &commands::BackgroundTask)> {
-        self.tasks.iter()
-    }
-}
-
-fn prompt_string(printer: &Printer) -> String {
+fn prompt_string(printer: &SerialPrinter) -> String {
     let status = match printer {
         print3rs_core::Printer::Disconnected => "Disconnected",
         print3rs_core::Printer::Connected { .. } => "Connected",
@@ -94,11 +54,9 @@ fn setup_logging(writer: SharedWriter) {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), AppError> {
-    let printer = Printer::default();
+    let mut printer = Printer::default();
 
     let (mut readline, mut writer) = Readline::new(prompt_string(&printer))?;
-
-    let (error_sender, mut error_receiver) = tokio::sync::mpsc::channel(8);
 
     writer.write_all(commands::version().as_bytes()).await?;
     writer
@@ -106,33 +64,12 @@ async fn main() -> Result<(), AppError> {
         .await?;
     setup_logging(writer.clone());
 
-    let (response_sender, mut response_receiver) = tokio::sync::mpsc::unbounded_channel();
+    let mut tasks = HashMap::new();
 
-    let mut app = AppState {
-        printer,
-        writer: response_sender.clone(),
-        tasks: HashMap::new(),
-        error_sender,
-    };
     loop {
         tokio::select! {
-            Ok(response) = app.printer.read_next_line() => {
+            Ok(response) = printer.read_next_line() => {
                 writer.write_all(&response).await?;
-            },
-            Some(error) = error_receiver.recv() => {
-                match error {
-                    AppError::Printer(_) => {
-                        app.printer.disconnect();
-                        writer.write_all(b"Printer is disconnected!\n").await?;
-                    },
-                    AppError::Connection(_) => {
-                        writer.write_all(b"Connection failed!\n").await?;
-                    },
-                    _ => {readline.flush()?; return Ok(());},
-                }
-            }
-            Some(message) = response_receiver.recv() => {
-                writer.write_all(message.as_bytes()).await?;
             },
             Ok(event) = readline.readline() => {
                 let line = match event {
@@ -146,17 +83,84 @@ async fn main() -> Result<(), AppError> {
                         continue;
                     }
                 };
-                match command {
-                    commands::Command::Clear => readline.clear()?,
-                    commands::Command::Quit => {readline.flush()?; return Ok(());},
-                    other => {
-                        commands::handle_command(&mut app, other).await;
-                    }
-                }
+                const DISCONNECTED_ERROR: &[u8] = b"No printer connected!\n";
+                 match command {
+                        commands::Command::Clear => {readline.clear()?;},
+                        commands::Command::Quit => {
+                            readline.flush()?;
+                            return Ok(());
+                        }
+                        commands::Command::Gcodes(codes) => if let Err(_e) = commands::send_gcodes(&printer, &codes) {
+                            writer.write_all(DISCONNECTED_ERROR).await?;
+                        },
+                        commands::Command::Print(filename) => {
+                            if let Ok(print) = commands::start_print_file(filename, &printer) {
+                            tasks.insert(filename.to_string(), print);
+                            } else {
+                                writer.write_all(DISCONNECTED_ERROR).await?;
+                            }
+                        }
+                        commands::Command::Log(name, pattern) => {
+                            if let Ok(log) = commands::start_logging(name, pattern, &printer) {
+                            tasks.insert(name.to_string(), log);
+                            } else {
+                                writer.write_all(DISCONNECTED_ERROR).await?;
+                            }
+                        }
+                        commands::Command::Repeat(name, gcodes) => {
+                            if let Ok(socket) = printer.socket() {
+                                let repeat = start_repeat(gcodes, socket.clone());
+                                tasks.insert(name.to_string(), repeat);}
+                            else {
+                                writer.write_all(DISCONNECTED_ERROR).await?;
+                            }
+                        }
+                        commands::Command::Tasks => {
+                            for (
+                                name,
+                                BackgroundTask {
+                                    description,
+                                    abort_handle: _,
+                                },
+                            ) in tasks.iter()
+                            {
+                                writer
+                                    .write_all(format!("{name}\t{description}\n").as_bytes())
+                                    .await?;
+                            }
+                        }
+                        commands::Command::Stop(name) => {
+                            tasks.remove(name);
+                        }
+                        commands::Command::Connect(path, baud) => {
+                            if let Ok(port) = tokio_serial::new(path, baud.unwrap_or(115200)).open_native_async() {
+                            printer.connect(port);
+                            } else {
+                                writer.write_all(b"Connection failed.\n").await?;
+                            }
+                        }
+                        commands::Command::AutoConnect => {
+                            writer.write_all(b"Connecting...\n").await?;
+                            printer = commands::auto_connect().await;
+                            writer.write_all(if printer.is_connected() {b"Found printer!\n"} else {b"No printer found.\n"}).await?;
+                        }
+                        commands::Command::Disconnect => printer.disconnect(),
+                        commands::Command::Help(subcommand) => {
+                            writer
+                                .write_all(commands::help(subcommand).as_bytes())
+                                .await?
+                        }
+                        commands::Command::Version => writer.write_all(commands::version().as_bytes()).await?,
+                        _ => {
+                            writer
+                                .write_all(b"Unrecognized command!\n")
+                                .await?
+                        }
+                    };
+
                 readline.add_history_entry(line);
             },
-
         }
-        readline.update_prompt(&prompt_string(&app.printer))?;
+        readline.update_prompt(&prompt_string(&printer))?;
     }
 }

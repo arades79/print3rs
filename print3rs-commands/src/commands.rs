@@ -7,11 +7,7 @@ use winnow::{
     token::take_till,
 };
 
-use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    task::JoinHandle,
-    time::timeout,
-};
+use tokio::{io::AsyncWriteExt, task::JoinHandle, time::timeout};
 
 use print3rs_core::{AsyncPrinterComm, Error as PrinterError, Printer, SerialPrinter};
 use tokio_serial::{available_ports, SerialPort, SerialPortBuilderExt, SerialPortInfo};
@@ -19,14 +15,14 @@ use tokio_serial::{available_ports, SerialPort, SerialPortBuilderExt, SerialPort
 async fn check_port(port: SerialPortInfo) -> Option<SerialPrinter> {
     tracing::debug!("checking port {}...", port.port_name);
     let mut printer_port = tokio_serial::new(port.port_name, 115200)
-        .timeout(std::time::Duration::from_secs(10))
+        .timeout(Duration::from_secs(10))
         .open_native_async()
         .ok()?;
     printer_port.write_data_terminal_ready(true).ok()?;
     let mut printer = SerialPrinter::new(printer_port);
 
-    printer.send_raw(b"M115\n").await.ok()?;
-    let look_for_ok = tokio::spawn(async move {
+    printer.send_raw(b"M115\n").ok()?;
+    let look_for_ok = async {
         while let Ok(line) = printer.read_next_line().await {
             let sline = String::from_utf8_lossy(&line);
             if sline.to_ascii_lowercase().contains("ok") {
@@ -34,23 +30,21 @@ async fn check_port(port: SerialPortInfo) -> Option<SerialPrinter> {
             }
         }
         None
-    });
+    };
 
-    timeout(Duration::from_secs(10), look_for_ok)
-        .await
-        .ok()?
-        .ok()?
+    timeout(Duration::from_secs(5), look_for_ok).await.ok()?
 }
 
-pub async fn auto_connect() -> Option<SerialPrinter> {
-    let ports = available_ports().ok()?;
-    tracing::info!("found available ports: {ports:?}");
-    for port in ports {
-        if let Some(printer) = check_port(port).await {
-            return Some(printer);
+pub async fn auto_connect() -> SerialPrinter {
+    if let Ok(ports) = available_ports() {
+        tracing::info!("found available ports: {ports:?}");
+        for port in ports {
+            if let Some(printer) = check_port(port).await {
+                return printer;
+            }
         }
     }
-    None
+    Printer::Disconnected
 }
 
 pub fn version() -> &'static str {
@@ -102,6 +96,7 @@ pub fn help(command: &str) -> &'static str {
 
 use crate::logging::parsing::{parse_logger, Segment};
 
+#[non_exhaustive]
 #[derive(Debug)]
 pub enum Command<'a> {
     Gcodes(Vec<Cow<'a, str>>),
@@ -173,21 +168,24 @@ pub fn parse_command<'a>(input: &mut &'a str) -> PResult<Command<'a>> {
     .parse_next(input)
 }
 
-async fn start_print_file<Transport>(
+pub fn start_print_file<Transport>(
     filename: &str,
     printer: &Printer<Transport>,
-) -> Result<tokio::task::AbortHandle, PrinterError> {
-    let mut file = tokio::fs::File::open(filename).await?;
-    let mut file_contents = String::new();
-    file.read_to_string(&mut file_contents).await?;
+) -> std::result::Result<BackgroundTask, print3rs_core::Error> {
+    let filename = filename.to_owned();
     let socket = printer.socket()?.clone();
     let task: JoinHandle<Result<(), TaskError>> = tokio::spawn(async move {
-        for line in file_contents.lines() {
-            socket.send(line).await?.await?;
+        if let Ok(file) = std::fs::read_to_string(filename) {
+            for line in file.lines() {
+                socket.send(line).await?.await?;
+            }
         }
         Ok(())
     });
-    Ok(task.abort_handle())
+    Ok(BackgroundTask {
+        description: "print",
+        abort_handle: task.abort_handle(),
+    })
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -198,27 +196,25 @@ enum TaskError {
     Join(#[from] tokio::task::JoinError),
 }
 
-async fn start_logging<Transport>(
+pub fn start_logging<Transport>(
     name: &str,
     pattern: Vec<crate::logging::parsing::Segment<'_>>,
     printer: &Printer<Transport>,
-) -> Result<tokio::task::AbortHandle, PrinterError> {
-    let mut log_file = tokio::fs::File::create(format!(
+) -> std::result::Result<BackgroundTask, print3rs_core::Error> {
+    let filename = format!(
         "{name}_{timestamp}.csv",
         timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_secs()
-    ))
-    .await?;
-
-    log_file
-        .write_all(crate::logging::parsing::get_headers(&pattern).as_bytes())
-        .await?;
+    );
+    let header = crate::logging::parsing::get_headers(&pattern);
 
     let mut parser = crate::logging::parsing::make_parser(pattern);
     let mut log_printer_reader = printer.subscribe_lines()?;
     let log_task_handle = tokio::spawn(async move {
+        let mut log_file = tokio::fs::File::create(filename).await.unwrap();
+        log_file.write_all(header.as_bytes()).await.unwrap();
         while let Ok(log_line) = log_printer_reader.recv().await {
             if let Ok(parsed) = parser.parse(&log_line) {
                 let mut record_bytes = String::new();
@@ -235,15 +231,14 @@ async fn start_logging<Transport>(
             }
         }
     });
-    Ok(log_task_handle.abort_handle())
+    Ok(BackgroundTask {
+        description: "log",
+        abort_handle: log_task_handle.abort_handle(),
+    })
 }
 
-async fn start_repeat<S>(
-    gcodes: Vec<Cow<'_, str>>,
-    printer: &Printer<S>,
-) -> tokio::task::AbortHandle {
+pub fn start_repeat(gcodes: Vec<Cow<'_, str>>, socket: print3rs_core::Socket) -> BackgroundTask {
     let gcodes: Vec<String> = gcodes.into_iter().map(|s| s.into_owned()).collect();
-    let socket = printer.socket().expect("already checked connected").clone();
 
     let task: JoinHandle<Result<(), TaskError>> = tokio::spawn(async move {
         for ref line in gcodes.into_iter().cycle() {
@@ -251,7 +246,10 @@ async fn start_repeat<S>(
         }
         Ok(())
     });
-    task.abort_handle()
+    BackgroundTask {
+        description: "repeat",
+        abort_handle: task.abort_handle(),
+    }
 }
 
 #[derive(Debug)]
@@ -260,113 +258,111 @@ pub struct BackgroundTask {
     pub abort_handle: tokio::task::AbortHandle,
 }
 
+impl Drop for BackgroundTask {
+    fn drop(&mut self) {
+        self.abort_handle.abort()
+    }
+}
+
 pub trait HandleCommand {
     type Error: From<PrinterError> + From<tokio_serial::Error>;
     fn printer(&self) -> &SerialPrinter;
-    fn printer_mut(&mut self) -> &mut SerialPrinter;
-    fn on_connect(&mut self);
+    fn on_connect(&self, printer: SerialPrinter);
     fn respond(&self, message: &str);
     fn error(&self, err: Self::Error);
-    fn add_task(&mut self, task_name: &str, task: BackgroundTask);
-    fn remove_task(&mut self, task_name: &str);
+    fn add_task(&self, task_name: &str, task: BackgroundTask);
+    fn remove_task(&self, task_name: &str);
     fn task_iter(&self) -> impl Iterator<Item = (&String, &BackgroundTask)>;
 }
 
-pub async fn handle_command(handler: &mut impl HandleCommand, command: Command<'_>) {
-    use Command::*;
-    match command {
-        Gcodes(gcodes) => {
-            for line in gcodes {
-                let _ = handler
-                    .printer()
-                    .send_unsequenced(line)
-                    .await
-                    .map_err(|e| handler.error(e.into()));
-            }
-        }
-        Log(name, pattern) => {
-            match start_logging(name, pattern, handler.printer()).await {
-                Ok(log_task_handle) => {
-                    handler.add_task(
-                        name,
-                        BackgroundTask {
-                            description: "log",
-                            abort_handle: log_task_handle,
-                        },
-                    );
-                }
-                Err(e) => handler.error(e.into()),
-            };
-        }
-        Repeat(name, gcodes) => {
-            let repeat_task = start_repeat(gcodes, handler.printer()).await;
-
-            handler.add_task(
-                name,
-                BackgroundTask {
-                    description: "repeat",
-                    abort_handle: repeat_task,
-                },
-            );
-        }
-        Connect(path, baud) => {
-            match tokio_serial::new(path, baud.unwrap_or(115200)).open_native_async() {
-                Ok(port) => {
-                    handler.printer_mut().connect(port);
-                    handler.on_connect();
-                }
-                Err(e) => handler.error(e.into()),
-            };
-        }
-        AutoConnect => {
-            handler.respond("Connecting...\n");
-            match auto_connect().await {
-                Some(new_printer) => {
-                    *handler.printer_mut() = new_printer;
-                    handler.on_connect();
-                    handler.respond("Found printer!\n");
-                }
-                None => {
-                    handler.respond("Printer not found.\n");
-                }
-            };
-        }
-        Disconnect => {
-            handler.printer_mut().disconnect();
-        }
-        Help(sub) => handler.respond(help(sub)),
-        Version => handler.respond(version()),
-        Unrecognized => {
-            handler.respond("Invalid command! use ':help' for valid commands and syntax\n");
-        }
-        Tasks => {
-            for (
-                name,
-                BackgroundTask {
-                    description,
-                    abort_handle: _,
-                },
-            ) in handler.task_iter()
-            {
-                handler.respond(format!("{name}\t{description}\n").as_str());
-            }
-        }
-        Stop(label) => handler.remove_task(label),
-        Print(filename) => match start_print_file(filename, handler.printer()).await {
-            Ok(print_task) => {
-                handler.add_task(
-                    filename,
-                    BackgroundTask {
-                        description: "print",
-                        abort_handle: print_task,
-                    },
-                );
-            }
-            Err(e) => {
-                handler.error(e.into());
-            }
-        },
-        Clear => (), // needs external handling
-        Quit => (),  // needs external handling
-    };
+pub fn send_gcodes(
+    printer: &impl AsyncPrinterComm,
+    codes: &[Cow<'_, str>],
+) -> Result<(), PrinterError> {
+    for line in codes {
+        printer.send_unsequenced(line)?;
+    }
+    Ok(())
 }
+
+// fn handle_command(handler: &impl HandleCommand, command: Command<'_>) {
+//     use Command::*;
+//     match command {
+//         Gcodes(gcodes) => {
+//             send_gcodes(handler.printer(), &gcodes);
+//         }
+//         Log(name, pattern) => {
+//             match start_logging(name, pattern, handler.printer()) {
+//                 Ok(log_task_handle) => {
+//                     handler.add_task(
+//                         name,
+//                         BackgroundTask {
+//                             description: "log",
+//                             abort_handle: log_task_handle.abort_handle(),
+//                         },
+//                     );
+//                 }
+//                 Err(e) => handler.error(e.into()),
+//             };
+//         }
+//         Repeat(name, gcodes) => {
+//             let repeat_task = start_repeat(gcodes, handler.printer());
+
+//             handler.add_task(
+//                 name,
+//                 BackgroundTask {
+//                     description: "repeat",
+//                     abort_handle: repeat_task.abort_handle(),
+//                 },
+//             );
+//         }
+//         Connect(path, baud) => {
+//             match tokio_serial::new(path, baud.unwrap_or(115200)).open_native_async() {
+//                 Ok(port) => {
+//                     handler.on_connect(Printer::new(port));
+//                 }
+//                 Err(e) => handler.error(e.into()),
+//             };
+//         }
+//         AutoConnect => {
+//             handler.respond("Connecting...\n");
+//         }
+//         Disconnect => {
+//             handler.on_connect(Printer::Disconnected);
+//         }
+//         Help(sub) => handler.respond(help(sub)),
+//         Version => handler.respond(version()),
+//         Unrecognized => {
+//             handler.respond("Invalid command! use ':help' for valid commands and syntax\n");
+//         }
+//         Tasks => {
+//             for (
+//                 name,
+//                 BackgroundTask {
+//                     description,
+//                     abort_handle: _,
+//                 },
+//             ) in handler.task_iter()
+//             {
+//                 handler.respond(format!("{name}\t{description}\n").as_str());
+//             }
+//         }
+//         Stop(label) => handler.remove_task(label),
+//         Print(filename) => match start_print_file(filename, handler.printer()) {
+//             Ok(print_task) => {
+//                 handler.add_task(
+//                     filename,
+//                     BackgroundTask {
+//                         description: "print",
+//                         abort_handle: print_task.abort_handle(),
+//                     },
+//                 );
+//             }
+//             Err(e) => {
+//                 handler.error(e.into());
+//             }
+//         },
+//         Clear => (), // needs external handling
+//         Quit => (),  // needs external handling
+//     };
+// }

@@ -3,9 +3,11 @@ use std::collections::HashMap;
 use iced::widget::combo_box::State as ComboState;
 use iced::widget::{button, column, combo_box, row, scrollable, text, text_input};
 use iced::{Application, Command, Length};
-use print3rs_commands::commands::{BackgroundTask, HandleCommand};
+use print3rs_commands::commands::BackgroundTask;
 use print3rs_core::AsyncPrinterComm;
 use tokio_serial::{available_ports, SerialPortBuilderExt};
+
+use winnow::prelude::*;
 
 #[derive(Debug, Clone)]
 struct ErrorKindOf(String);
@@ -65,7 +67,6 @@ enum Message {
     ChangePort(String),
     ChangeBaud(u32),
     ToggleConnect,
-    GcodeFinish,
     CommandInput(String),
     ProcessCommand,
 }
@@ -108,15 +109,8 @@ impl iced::Application for App {
     fn update(&mut self, message: Self::Message) -> iced::Command<Self::Message> {
         match message {
             Message::Jog(JogMove { x, y, z }) => {
-                if let Ok(socket) = self.printer.socket() {
-                    let socket = socket.clone();
-                    Command::perform(
-                        async move { socket.send_unsequenced(format!("G7X{x}Y{y}Z{z}")).await },
-                        |_| Message::GcodeFinish,
-                    )
-                } else {
-                    Command::none()
-                }
+                let _ = self.printer.send_unsequenced(format!("G7X{x}Y{y}Z{z}"));
+                Command::none()
             }
             Message::ToggleConnect => {
                 if self.printer.is_connected() {
@@ -133,18 +127,94 @@ impl iced::Application for App {
 
                 Command::none()
             }
-            Message::GcodeFinish => Command::none(),
             Message::CommandInput(s) => {
                 self.command = s;
                 Command::none()
             }
             Message::ProcessCommand => {
-                if self.command.is_empty() {
-                    return Command::none();
+                if let Ok(command) = print3rs_commands::commands::parse_command.parse(&self.command)
+                {
+                    use print3rs_commands::commands;
+                    use print3rs_commands::commands::Command::*;
+                    const DISCONNECTED_ERROR: &str = "No printer connected!\n";
+                    match command {
+                        Clear => {
+                            self.output.clear();
+                        }
+                        Quit => {
+                            todo!()
+                        }
+                        Gcodes(codes) => {
+                            if let Err(_e) = commands::send_gcodes(&self.printer, &codes) {
+                                self.output.push_str(DISCONNECTED_ERROR);
+                            }
+                        }
+                        Print(filename) => {
+                            if let Ok(print) = commands::start_print_file(filename, &self.printer) {
+                                self.tasks.insert(filename.to_string(), print);
+                            } else {
+                                self.output.push_str(DISCONNECTED_ERROR);
+                            }
+                        }
+                        Log(name, pattern) => {
+                            if let Ok(log) = commands::start_logging(name, pattern, &self.printer) {
+                                self.tasks.insert(name.to_string(), log);
+                            } else {
+                                self.output.push_str(DISCONNECTED_ERROR);
+                            }
+                        }
+                        Repeat(name, gcodes) => {
+                            if let Ok(socket) = self.printer.socket() {
+                                let repeat = commands::start_repeat(gcodes, socket.clone());
+                                self.tasks.insert(name.to_string(), repeat);
+                            } else {
+                                self.output.push_str(DISCONNECTED_ERROR);
+                            }
+                        }
+                        Tasks => {
+                            for (
+                                name,
+                                BackgroundTask {
+                                    description,
+                                    abort_handle: _,
+                                },
+                            ) in self.tasks.iter()
+                            {
+                                self.output
+                                    .push_str(format!("{name}\t{description}\n").as_str());
+                            }
+                        }
+                        Stop(name) => {
+                            self.tasks.remove(name);
+                        }
+                        Connect(path, baud) => {
+                            if let Ok(port) =
+                                tokio_serial::new(path, baud.unwrap_or(115200)).open_native_async()
+                            {
+                                self.printer.connect(port);
+                            } else {
+                                self.output.push_str("Connection failed.\n");
+                            }
+                        }
+                        AutoConnect => {
+                            self.output.push_str("Connecting...\n");
+                            todo!();
+                            // self.printer = commands::auto_connect().await;
+                            // self.output.push_str(if self.printer.is_connected() {
+                            //     "Found printer!\n"
+                            // } else {
+                            //     "No printer found.\n"
+                            // });
+                        }
+                        Disconnect => self.printer.disconnect(),
+                        Help(subcommand) => self.output.push_str(commands::help(subcommand)),
+                        Version => self.output.push_str(commands::version()),
+                        _ => self.output.push_str("Unrecognized command!\n"),
+                    };
+                    self.command.push('\n');
+                    self.output.push_str(&self.command);
+                    self.command.clear();
                 }
-                self.command.push('\n');
-                self.output.push_str(&self.command);
-                self.command.clear();
                 Command::none()
             }
             Message::ChangePort(port) => {

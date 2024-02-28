@@ -1967,7 +1967,7 @@ dependencies = [
  "tokio-serial",
  "tracing",
  "tracing-subscriber",
- "winnow 0.6.0",
+ "winnow 0.6.3",
 ]
 
 [[package]]
@@ -1984,7 +1984,7 @@ dependencies = [
  "tokio-serial",
  "tracing",
  "tracing-subscriber",
- "winnow 0.6.0",
+ "winnow 0.6.3",
 ]
 
 [[package]]
@@ -1999,19 +1999,20 @@ dependencies = [
  "tokio",
  "tokio-serial",
  "tracing",
- "winnow 0.6.0",
+ "winnow 0.6.3",
 ]
 
 [[package]]
 name = "print3rs-gui"
 version = "0.1.0"
 dependencies = [
- "futures",
  "gcode-serializer",
  "iced",
  "print3rs-commands",
  "print3rs-core",
+ "tokio",
  "tokio-serial",
+ "winnow 0.6.3",
 ]
 
 [[package]]
@@ -3539,9 +3540,9 @@ dependencies = [
 
 [[package]]
 name = "winnow"
-version = "0.6.0"
+version = "0.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6b1dbce9e90e5404c5a52ed82b1d13fc8cfbdad85033b6f57546ffd1265f8451"
+checksum = "44e19b97e00a4d3db3cdb9b53c8c5f87151b5689b82cc86c2848cbdcccb2689b"
 dependencies = [
  "memchr",
 ]

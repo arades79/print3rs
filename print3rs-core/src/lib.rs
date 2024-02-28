@@ -13,7 +13,8 @@ use gcode_serializer::{serialize_unsequenced, Sequenced};
 
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
-    sync::{broadcast, mpsc}, task::JoinHandle,
+    sync::{broadcast, mpsc},
+    task::JoinHandle,
 };
 
 use sealed::sealed;
@@ -46,20 +47,20 @@ pub trait AsyncPrinterComm {
     ///
     /// If your printer supports it, the sequenced `send` function is preferred,
     /// although this version is slightly lower overhead.
-    async fn send_unsequenced(&self, gcode: impl Serialize + Debug) -> Result<(), Error>;
+    fn send_unsequenced(&self, gcode: impl Serialize + Debug) -> Result<(), Error>;
 
     /// Send any raw sequence of bytes to the printer
-    async fn send_raw(&self, gcode: &[u8]) -> Result<(), Error>;
+    fn send_raw(&self, gcode: &[u8]) -> Result<(), Error>;
 
     /// Read the next line from the printer
     ///
     /// May not recieve all lines, if calls to this function are spaced
     /// far apart, the buffer may overfill and the oldest messages will
     /// be dropped. In this case the oldest available message is returned.
-    async fn read_next_line(&mut self) -> Result<Bytes, Error>;
+    async fn read_next_line(&mut self) -> Result<Bytes, DisconnectedError>;
 
     /// Obtain a broadcast receiver returning all lines received by the printer
-    fn subscribe_lines(&self) -> Result<LineStream, Error>;
+    fn subscribe_lines(&self) -> Result<LineStream, DisconnectedError>;
 }
 
 pub async fn search_for_sequence(sequence: i32, mut responses: LineStream) -> Response {
@@ -128,17 +129,15 @@ impl AsyncPrinterComm for Socket {
     ///
     /// If your printer supports it, the sequenced `send` function is preferred,
     /// although this version is slightly lower overhead.
-    async fn send_unsequenced(&self, gcode: impl Serialize + Debug) -> Result<(), Error> {
+    fn send_unsequenced(&self, gcode: impl Serialize + Debug) -> Result<(), Error> {
         let bytes = serialize_unsequenced(gcode);
-        self.sender.send(bytes).await?;
+        self.sender.try_send(bytes)?;
         Ok(())
     }
 
     /// Send any raw sequence of bytes to the printer
-    async fn send_raw(&self, gcode: &[u8]) -> Result<(), Error> {
-        self.sender
-            .send(gcode.to_owned().into_boxed_slice())
-            .await?;
+    fn send_raw(&self, gcode: &[u8]) -> Result<(), Error> {
+        self.sender.try_send(gcode.to_owned().into_boxed_slice())?;
         Ok(())
     }
 
@@ -147,18 +146,20 @@ impl AsyncPrinterComm for Socket {
     /// May not recieve all lines, if calls to this function are spaced
     /// far apart, the buffer may overfill and the oldest messages will
     /// be dropped. In this case the oldest available message is returned.
-    async fn read_next_line(&mut self) -> Result<Bytes, Error> {
+    async fn read_next_line(&mut self) -> Result<Bytes, DisconnectedError> {
         loop {
             match self.responses.recv().await {
                 Ok(line) => break Ok(line),
                 Err(broadcast::error::RecvError::Lagged(_)) => todo!(),
-                Err(broadcast::error::RecvError::Closed) => break Err(Error::Disconnected),
+                Err(broadcast::error::RecvError::Closed) => {
+                    break Err(DisconnectedError::Disconnected)
+                }
             }
         }
     }
 
     /// Obtain a broadcast receiver returning all lines received by the printer
-    fn subscribe_lines(&self) -> Result<LineStream, Error> {
+    fn subscribe_lines(&self) -> Result<LineStream, DisconnectedError> {
         Ok(self.responses.resubscribe())
     }
 }
@@ -193,13 +194,19 @@ pub enum Error {
     #[error("Background task failed to propagate message from printer\nError message: {0}")]
     ResponseSender(#[from] broadcast::error::SendError<Bytes>),
 
-    #[error("Couldn't send data to background task\nError message: {0}")]
-    Sender(#[from] mpsc::error::SendError<Box<[u8]>>),
+    #[error("Send queue full or closed")]
+    Sender(#[from] tokio::sync::mpsc::error::TrySendError<std::boxed::Box<[u8]>>),
 
-    #[error("Couldn't reserve a slot to send message\nError message: {0}")]
+    #[error("Couldn't reserve a slot to send message")]
     SendReserve(#[from] mpsc::error::SendError<()>),
 
     #[error("Underlying printer connection was closed")]
+    Disconnected(#[from] DisconnectedError),
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum DisconnectedError {
+    #[error("Printer disconnected")]
     Disconnected,
 }
 
@@ -272,17 +279,17 @@ impl<S> Printer<S> {
     }
 
     /// Obtain a cloneable socket handle to talk to printer
-    pub fn socket(&self) -> Result<&Socket, Error> {
+    pub fn socket(&self) -> Result<&Socket, DisconnectedError> {
         match self {
-            Self::Disconnected => Err(Error::Disconnected),
+            Self::Disconnected => Err(DisconnectedError::Disconnected),
             Self::Connected { socket, .. } => Ok(socket),
         }
     }
 
     /// Obtain an exclusive socket handle - needed to read
-    pub fn socket_mut(&mut self) -> Result<&mut Socket, Error> {
+    pub fn socket_mut(&mut self) -> Result<&mut Socket, DisconnectedError> {
         match self {
-            Self::Disconnected => Err(Error::Disconnected),
+            Self::Disconnected => Err(DisconnectedError::Disconnected),
             Self::Connected { socket, .. } => Ok(socket),
         }
     }
@@ -302,7 +309,7 @@ impl<S> Printer<S> {
     pub fn background_task(&self) -> Option<&JoinHandle<()>> {
         match self {
             Printer::Disconnected => None,
-            Printer::Connected {com_task, ..} => Some(com_task),
+            Printer::Connected { com_task, .. } => Some(com_task),
         }
     }
 }
@@ -317,22 +324,25 @@ impl<S> AsyncPrinterComm for Printer<S> {
         socket.send(gcode).await
     }
 
-    async fn send_unsequenced(&self, gcode: impl Serialize + Debug) -> Result<(), Error> {
+    fn send_unsequenced(&self, gcode: impl Serialize + Debug) -> Result<(), Error> {
         let socket = self.socket()?;
-        socket.send_unsequenced(gcode).await
+        socket.send_unsequenced(gcode)
     }
 
-    async fn send_raw(&self, gcode: &[u8]) -> Result<(), Error> {
+    fn send_raw(&self, gcode: &[u8]) -> Result<(), Error> {
         let socket = self.socket()?;
-        socket.send_raw(gcode).await
+        socket.send_raw(gcode)
     }
 
-    async fn read_next_line(&mut self) -> Result<Bytes, Error> {
+    async fn read_next_line(&mut self) -> Result<Bytes, DisconnectedError> {
         let socket = self.socket_mut()?;
-        socket.read_next_line().await.inspect_err(|e| if let Error::Disconnected = e {self.disconnect()})
+        socket
+            .read_next_line()
+            .await
+            .inspect_err(|_| self.disconnect())
     }
 
-    fn subscribe_lines(&self) -> Result<LineStream, Error> {
+    fn subscribe_lines(&self) -> Result<LineStream, DisconnectedError> {
         let socket = self.socket()?;
         socket.subscribe_lines()
     }
