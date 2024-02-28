@@ -2006,6 +2006,7 @@ dependencies = [
 name = "print3rs-gui"
 version = "0.1.0"
 dependencies = [
+ "futures",
  "gcode-serializer",
  "iced",
  "print3rs-commands",

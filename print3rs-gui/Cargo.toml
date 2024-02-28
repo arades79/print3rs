@@ -11,3 +11,4 @@ gcode-serializer ={ path = "../gcode-serializer"}
 print3rs-commands = {path = "../print3rs-commands"}
 iced = { version = "0.12.1", features = ["tokio"] }
 tokio-serial = {version = "5.4.4", features = ["libudev"]}
+futures = "0.3.30"
