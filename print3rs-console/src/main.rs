@@ -65,7 +65,7 @@ async fn main() -> Result<(), AppError> {
     setup_logging(writer.clone());
 
     let mut tasks = HashMap::new();
-    let mut macros: HashMap<String, Vec<String>> = HashMap::new();
+    let mut macros = commands::Macros::new();
 
     loop {
         tokio::select! {
@@ -92,7 +92,8 @@ async fn main() -> Result<(), AppError> {
                             return Ok(());
                         }
                         commands::Command::Gcodes(codes) => {
-                            if let Err(_e) = commands::send_gcodes(&printer, &codes, Some(&macros)) {
+                            let codes = macros.expand_all(codes);
+                            if let Err(_e) = commands::send_gcodes(&printer, &codes) {
                             writer.write_all(DISCONNECTED_ERROR).await?;
                         }},
                         commands::Command::Print(filename) => {
@@ -111,6 +112,7 @@ async fn main() -> Result<(), AppError> {
                         }
                         commands::Command::Repeat(name, gcodes) => {
                             if let Ok(socket) = printer.socket() {
+                                let gcodes = macros.expand_all(gcodes);
                                 let repeat = start_repeat(gcodes, socket.clone());
                                 tasks.insert(name.to_string(), repeat);}
                             else {
@@ -135,8 +137,7 @@ async fn main() -> Result<(), AppError> {
                             tasks.remove(name);
                         }
                         commands::Command::Macro(name, commands) => {
-                            let commands = commands.into_iter().map(|s| s.to_string()).collect();
-                            macros.insert(name.to_owned(), commands);
+                            macros.add(name, commands);
                         },
                         commands::Command::Macros => {
                             for (name, steps) in macros.iter() {

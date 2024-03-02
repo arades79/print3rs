@@ -34,6 +34,49 @@ async fn check_port(port: SerialPortInfo) -> Option<SerialPrinter> {
 
     timeout(Duration::from_secs(5), look_for_ok).await.ok()?
 }
+type MacrosInner = HashMap<String, Vec<String>>;
+#[derive(Debug, Default)]
+pub struct Macros(MacrosInner);
+impl Macros {
+    pub fn new() -> Self {
+        Self(MacrosInner::new())
+    }
+    pub fn add(&mut self, name: impl AsRef<str>, steps: impl IntoIterator<Item = impl AsRef<str>>) {
+        let commands = steps
+            .into_iter()
+            .map(|s| s.as_ref().to_ascii_uppercase())
+            .collect();
+        self.0.insert(name.as_ref().to_owned(), commands);
+    }
+    pub fn get(&self, name: impl AsRef<str>) -> Option<&Vec<String>> {
+        self.0.get(&name.as_ref().to_ascii_uppercase())
+    }
+    pub fn remove(&mut self, name: impl AsRef<str>) -> Option<Vec<String>> {
+        self.0.remove(name.as_ref())
+    }
+    pub fn iter(&self) -> std::collections::hash_map::Iter<'_, String, Vec<String>> {
+        self.0.iter()
+    }
+    fn expand(&self, expanded: &mut Vec<String>, code: &str) {
+        match self.get(code) {
+            Some(expansion) => {
+                for extra in expansion {
+                    self.expand(expanded, extra)
+                }
+            }
+            None => expanded.push(code.to_ascii_uppercase()),
+        }
+    }
+    /// recursively expand all macros in a sequence, automatically upper casing all outputs to be sent.
+    pub fn expand_all(&self, codes: impl IntoIterator<Item = impl AsRef<str>>) -> Vec<String> {
+        let mut expanded = vec![];
+
+        for code in codes {
+            self.expand(&mut expanded, code.as_ref());
+        }
+        expanded
+    }
+}
 
 pub async fn auto_connect() -> SerialPrinter {
     if let Ok(ports) = available_ports() {
@@ -72,6 +115,9 @@ print        <file>           send gcodes from file to printer
 log          <name> <pattern> begin logging parsed output from printer
 repeat       <name> <gcodes>  run the given gcodes in a loop until stop
 stop         <name>           stop an active print, log, or repeat
+macro        <name> <gcodes>  make an alias for a set of gcodes
+delmacro     <name>           remove an existing alias for set of gcodes
+macros                        list existing command aliases and contents           
 send         <gcodes>         explicitly send commands (split by ;) to printer exactly as typed
 connect      <path> <baud?>   connect to a specified serial device at baud (default: 115200)
 autoconnect                   attempt to find and connect to a printer
@@ -90,6 +136,7 @@ pub fn help(command: &str) -> &'static str {
         "connect" => "connect: Manually connect to a printer by specifying its path and optionally its baudrate. On windows this looks like `connect COM3 115200`, on linux more like `connect /dev/tty/ACM0 250000`. This does not test if the printer is capable of responding to messages, it will only open the port.\n",
         "autoconnect" => "autoconnect: On some supported printer firmwares, this will automatically detect a connected printer and verify that it's capable of receiving and responding to commands. This is done with an `M115` command sent to the device, and waiting at most 5 seconds for an `ok` response. If your printer does not support this command, this will not work and you will need manual connection.\n",
         "disconnect" => "disconnect: disconnect from the currently connected printer. All active tasks will be stopped\n",
+        "macro" => "create a case-insensitve alias to some set of gcodes, even containing other macros recursively to build up complex sets of builds with a single word. Macro names cannot start with G,T,M,N, or D to avoid conflict with Gcodes, and cannot have any non-alphanumeric characters. commands in a macro are separated by ';', and macros can be used anywhere Gcodes are passed, including repeat commands and sends.\n",
         _ => FULL_HELP,
     }
 }
@@ -254,9 +301,7 @@ pub fn start_logging<Transport>(
     })
 }
 
-pub fn start_repeat(gcodes: Vec<Cow<'_, str>>, socket: print3rs_core::Socket) -> BackgroundTask {
-    let gcodes: Vec<String> = gcodes.into_iter().map(|s| s.into_owned()).collect();
-
+pub fn start_repeat(gcodes: Vec<String>, socket: print3rs_core::Socket) -> BackgroundTask {
     let task: JoinHandle<Result<(), TaskError>> = tokio::spawn(async move {
         for ref line in gcodes.into_iter().cycle() {
             socket.send(line).await?.await?;
@@ -284,36 +329,9 @@ impl Drop for BackgroundTask {
 pub fn send_gcodes(
     printer: &impl AsyncPrinterComm,
     codes: impl IntoIterator<Item = impl AsRef<str>>,
-    macros: Option<&HashMap<String, Vec<String>>>,
 ) -> Result<(), PrinterError> {
-    match macros {
-        Some(macros) => {
-            fn expand(
-                printer: &impl AsyncPrinterComm,
-                code: &str,
-                macros: &HashMap<String, Vec<String>>,
-            ) -> Result<(), PrinterError> {
-                match macros.get(code) {
-                    Some(expansion) => {
-                        for extra in expansion {
-                            expand(printer, extra, macros)?;
-                        }
-                        Ok(())
-                    }
-                    None => printer.send_unsequenced(code),
-                }
-            }
-            for code in codes {
-                expand(printer, code.as_ref(), macros)?;
-            }
-        }
-        None => {
-            for line in codes {
-                printer.send_unsequenced(line.as_ref())?;
-            }
-        }
+    for code in codes {
+        printer.send_unsequenced(code.as_ref())?;
     }
-
     Ok(())
 }
-
