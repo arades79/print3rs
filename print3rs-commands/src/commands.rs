@@ -281,17 +281,6 @@ impl Drop for BackgroundTask {
     }
 }
 
-pub trait HandleCommand {
-    type Error: From<PrinterError> + From<tokio_serial::Error>;
-    fn printer(&self) -> &SerialPrinter;
-    fn on_connect(&self, printer: SerialPrinter);
-    fn respond(&self, message: &str);
-    fn error(&self, err: Self::Error);
-    fn add_task(&self, task_name: &str, task: BackgroundTask);
-    fn remove_task(&self, task_name: &str);
-    fn task_iter(&self) -> impl Iterator<Item = (&String, &BackgroundTask)>;
-}
-
 pub fn send_gcodes(
     printer: &impl AsyncPrinterComm,
     codes: impl IntoIterator<Item = impl AsRef<str>>,
@@ -328,84 +317,3 @@ pub fn send_gcodes(
     Ok(())
 }
 
-// fn handle_command(handler: &impl HandleCommand, command: Command<'_>) {
-//     use Command::*;
-//     match command {
-//         Gcodes(gcodes) => {
-//             send_gcodes(handler.printer(), &gcodes);
-//         }
-//         Log(name, pattern) => {
-//             match start_logging(name, pattern, handler.printer()) {
-//                 Ok(log_task_handle) => {
-//                     handler.add_task(
-//                         name,
-//                         BackgroundTask {
-//                             description: "log",
-//                             abort_handle: log_task_handle.abort_handle(),
-//                         },
-//                     );
-//                 }
-//                 Err(e) => handler.error(e.into()),
-//             };
-//         }
-//         Repeat(name, gcodes) => {
-//             let repeat_task = start_repeat(gcodes, handler.printer());
-
-//             handler.add_task(
-//                 name,
-//                 BackgroundTask {
-//                     description: "repeat",
-//                     abort_handle: repeat_task.abort_handle(),
-//                 },
-//             );
-//         }
-//         Connect(path, baud) => {
-//             match tokio_serial::new(path, baud.unwrap_or(115200)).open_native_async() {
-//                 Ok(port) => {
-//                     handler.on_connect(Printer::new(port));
-//                 }
-//                 Err(e) => handler.error(e.into()),
-//             };
-//         }
-//         AutoConnect => {
-//             handler.respond("Connecting...\n");
-//         }
-//         Disconnect => {
-//             handler.on_connect(Printer::Disconnected);
-//         }
-//         Help(sub) => handler.respond(help(sub)),
-//         Version => handler.respond(version()),
-//         Unrecognized => {
-//             handler.respond("Invalid command! use ':help' for valid commands and syntax\n");
-//         }
-//         Tasks => {
-//             for (
-//                 name,
-//                 BackgroundTask {
-//                     description,
-//                     abort_handle: _,
-//                 },
-//             ) in handler.task_iter()
-//             {
-//                 handler.respond(format!("{name}\t{description}\n").as_str());
-//             }
-//         }
-//         Stop(label) => handler.remove_task(label),
-//         Print(filename) => match start_print_file(filename, handler.printer()) {
-//             Ok(print_task) => {
-//                 handler.add_task(
-//                     filename,
-//                     BackgroundTask {
-//                         description: "print",
-//                         abort_handle: print_task.abort_handle(),
-//                     },
-//                 );
-//             }
-//             Err(e) => {
-//                 handler.error(e.into());
-//             }
-//         },
-//         Clear => (), // needs external handling
-//         Quit => (),  // needs external handling
-//     };
-// }
