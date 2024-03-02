@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use {print3rs_core::SerialPrinter, std::collections::HashMap};
 
 use iced::widget::combo_box::State as ComboState;
 use iced::widget::{button, column, combo_box, row, scrollable, text, text_input};
@@ -67,6 +67,7 @@ enum Message {
     ChangePort(String),
     ChangeBaud(u32),
     ToggleConnect,
+    Connected(SerialPrinter),
     CommandInput(String),
     ProcessCommand,
 }
@@ -209,14 +210,17 @@ impl iced::Application for App {
                         Disconnect => self.printer.disconnect(),
                         Help(subcommand) => self.output.push_str(commands::help(subcommand)),
                         Version => self.output.push_str(commands::version()),
-                        _ => self.output.push_str("Unrecognized command!\n"),
+                        Unrecognized => self.output.push_str("Unrecognized command!\n"),
+                        _ => (),
                     };
-                    self.command.push('\n');
-                    self.output.push_str(&self.command);
+                    //self.output.push_str(&self.command);
                     self.command.clear();
                 }
                 Command::none()
             }
+            Message::Connected(printer) => {
+                self.printer = printer;
+            },
             Message::ChangePort(port) => {
                 self.selected_port = Some(port);
                 Command::none()
@@ -245,19 +249,9 @@ impl iced::Application for App {
         )
         .width(Length::FillPortion(1))
         .on_input(|s| Message::ChangeBaud(s.parse().unwrap_or_default()));
-        let maybe_jog_x = |dist| {
-            self.printer
-                .is_connected()
-                .then_some(Message::Jog(JogMove::x(dist)))
-        };
-        let maybe_jog_y = |dist| {
-            self.printer
-                .is_connected()
-                .then_some(Message::Jog(JogMove::y(dist)))
-        };
+        let maybe_jog = |jogmove| self.printer.is_connected().then_some(Message::Jog(jogmove));
         column![
-            column![
-                row![
+            row![
                     port_list,
                     baud_list,
                     button(if self.printer.is_connected() {
@@ -267,22 +261,31 @@ impl iced::Application for App {
                     })
                     .on_press(Message::ToggleConnect)
                 ],
-                button("Y+100.0").on_press_maybe(maybe_jog_y(100.0)),
-                button("Y+10.0").on_press_maybe(maybe_jog_y(10.0)),
-                button("Y+1.0").on_press_maybe(maybe_jog_y(1.0)),
+            row![column![
+                button("Y+100.0").on_press_maybe(maybe_jog(JogMove::y(100.0))),
+                button("Y+10.0").on_press_maybe(maybe_jog(JogMove::y(10.0))),
+                button("Y+1.0").on_press_maybe(maybe_jog(JogMove::y(1.0))),
                 row![
-                    button("X-100.0").on_press_maybe(maybe_jog_x(-100.0)),
-                    button("X-10.0").on_press_maybe(maybe_jog_x(-10.0)),
-                    button("X-1.0").on_press_maybe(maybe_jog_x(-1.0)),
-                    button("X+1.0").on_press_maybe(maybe_jog_x(1.0)),
-                    button("X+10.0").on_press_maybe(maybe_jog_x(10.0)),
-                    button("X+100.0").on_press_maybe(maybe_jog_x(100.0))
+                    button("X-100.0").on_press_maybe(maybe_jog(JogMove::x(-100.0))),
+                    button("X-10.0").on_press_maybe(maybe_jog(JogMove::x(-10.0))),
+                    button("X-1.0").on_press_maybe(maybe_jog(JogMove::x(-1.0))),
+                    button("X+1.0").on_press_maybe(maybe_jog(JogMove::x(1.0))),
+                    button("X+10.0").on_press_maybe(maybe_jog(JogMove::x(10.0))),
+                    button("X+100.0").on_press_maybe(maybe_jog(JogMove::x(100.0)))
                 ],
-                button("Y-1.0").on_press_maybe(maybe_jog_y(-1.0)),
-                button("Y-10.0").on_press_maybe(maybe_jog_y(-10.0)),
-                button("Y-100.0").on_press_maybe(maybe_jog_y(-100.0)),
+                button("Y-1.0").on_press_maybe(maybe_jog(JogMove::y(-1.0))),
+                button("Y-10.0").on_press_maybe(maybe_jog(JogMove::y(-10.0))),
+                button("Y-100.0").on_press_maybe(maybe_jog(JogMove::y(-100.0))),
             ]
             .align_items(iced::Alignment::Center),
+            column![
+                button("Z+10.0").on_press_maybe(maybe_jog(JogMove::z(-10.0))),
+                button("Z+1.0").on_press_maybe(maybe_jog(JogMove::z(-1.0))),
+                button("Z+0.1").on_press_maybe(maybe_jog(JogMove::z(-0.1))),
+                button("Z-0.1").on_press_maybe(maybe_jog(JogMove::z(0.1))),
+                button("Z-1.0").on_press_maybe(maybe_jog(JogMove::z(1.0))),
+                button("Z-10.0").on_press_maybe(maybe_jog(JogMove::z(10.0))),
+            ]],
             scrollable(text(&self.output))
                 .width(Length::Fill)
                 .height(Length::Fill),
