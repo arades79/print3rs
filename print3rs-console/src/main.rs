@@ -65,6 +65,7 @@ async fn main() -> Result<(), AppError> {
     setup_logging(writer.clone());
 
     let mut tasks = HashMap::new();
+    let mut macros: HashMap<String, Vec<String>> = HashMap::new();
 
     loop {
         tokio::select! {
@@ -78,7 +79,7 @@ async fn main() -> Result<(), AppError> {
                 };
                 let command = match commands::parse_command.parse(&line) {
                     Ok(command) => command,
-                    Err(_) => {
+                    Err(_e) => {
                         writer.write_all(b"invalid command!\n").await?;
                         continue;
                     }
@@ -90,9 +91,10 @@ async fn main() -> Result<(), AppError> {
                             readline.flush()?;
                             return Ok(());
                         }
-                        commands::Command::Gcodes(codes) => if let Err(_e) = commands::send_gcodes(&printer, &codes) {
+                        commands::Command::Gcodes(codes) => {
+                            if let Err(_e) = commands::send_gcodes(&printer, &codes, Some(&macros)) {
                             writer.write_all(DISCONNECTED_ERROR).await?;
-                        },
+                        }},
                         commands::Command::Print(filename) => {
                             if let Ok(print) = commands::start_print_file(filename, &printer) {
                             tasks.insert(filename.to_string(), print);
@@ -132,6 +134,24 @@ async fn main() -> Result<(), AppError> {
                         commands::Command::Stop(name) => {
                             tasks.remove(name);
                         }
+                        commands::Command::Macro(name, commands) => {
+                            let commands = commands.into_iter().map(|s| s.to_string()).collect();
+                            macros.insert(name.to_owned(), commands);
+                        },
+                        commands::Command::Macros => {
+                            for (name, steps) in macros.iter() {
+                                writer.write_all(name.as_bytes()).await?;
+                                writer.write_all(b"\t").await?;
+                                for step in steps {
+                                    writer.write_all(step.as_bytes()).await?;
+                                    writer.write_all(b";").await?;
+                                }
+                                writer.write_all(b"\n").await?;
+                            }
+                        }
+                        commands::Command::DeleteMacro(name) => {
+                            macros.remove(name);
+                        }
                         commands::Command::Connect(path, baud) => {
                             if let Ok(port) = tokio_serial::new(path, baud.unwrap_or(115200)).open_native_async() {
                             printer.connect(port);
@@ -153,7 +173,7 @@ async fn main() -> Result<(), AppError> {
                         commands::Command::Version => writer.write_all(commands::version().as_bytes()).await?,
                         _ => {
                             writer
-                                .write_all(b"Unrecognized command!\n")
+                                .write_all(b"Unsupported command!\n")
                                 .await?
                         }
                     };

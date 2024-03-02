@@ -1,4 +1,4 @@
-use std::{borrow::Cow, time::Duration};
+use std::{borrow::Cow, collections::HashMap, time::Duration};
 
 use winnow::{
     ascii::{alpha1, alphanumeric1, dec_uint, space0, space1},
@@ -108,6 +108,9 @@ pub enum Command<'a> {
     Connect(&'a str, Option<u32>),
     AutoConnect,
     Disconnect,
+    Macro(&'a str, Vec<Cow<'a, str>>),
+    Macros,
+    DeleteMacro(&'a str),
     Help(&'a str),
     Version,
     Clear,
@@ -121,11 +124,22 @@ fn parse_gcodes<'a>(input: &mut &'a str) -> PResult<Vec<Cow<'a, str>>> {
 
 fn parse_repeater<'a>(input: &mut &'a str) -> PResult<Command<'a>> {
     (
-        preceded(space1, alphanumeric1),
+        preceded(space0, alphanumeric1),
         preceded(space1, parse_gcodes),
     )
         .map(|(name, gcodes)| Command::Repeat(name, gcodes))
         .parse_next(input)
+}
+
+fn parse_macro<'a>(input: &mut &'a str) -> PResult<Command<'a>> {
+    let alpha_no_reserved_start =
+        alpha1.verify(|s: &str| !s.starts_with(|c: char| "GTMND".contains(c.to_ascii_uppercase())));
+    let (name, steps) = (
+        preceded(space0, alpha_no_reserved_start),
+        preceded(space1, parse_gcodes),
+    )
+        .parse_next(input)?;
+    Ok(Command::Macro(name, steps))
 }
 
 fn inner_command<'a>(input: &mut &'a str) -> PResult<Command<'a>> {
@@ -141,6 +155,9 @@ fn inner_command<'a>(input: &mut &'a str) -> PResult<Command<'a>> {
         "autoconnect" => empty.map(|_| Command::AutoConnect),
         "disconnect" => empty.map(|_| Command::Disconnect),
         "connect" => (preceded(space0, take_till(1.., [' '])), preceded(space0,opt(dec_uint))).map(|(path, baud)| Command::Connect(path, baud)),
+        "macro" => parse_macro,
+        "macros" => empty.map(|_| Command::Macros),
+        "delmacro" => preceded(space0, rest).map(Command::DeleteMacro),
         "send" => preceded(space0, parse_gcodes).map(Command::Gcodes),
         "clear" => empty.map(|_| Command::Clear),
         "quit" | "exit" => empty.map(|_| Command::Quit),
@@ -277,11 +294,37 @@ pub trait HandleCommand {
 
 pub fn send_gcodes(
     printer: &impl AsyncPrinterComm,
-    codes: &[Cow<'_, str>],
+    codes: &[impl AsRef<str>],
+    macros: Option<&HashMap<String, Vec<String>>>,
 ) -> Result<(), PrinterError> {
-    for line in codes {
-        printer.send_unsequenced(line)?;
+    match macros {
+        Some(macros) => {
+            fn expand(
+                printer: &impl AsyncPrinterComm,
+                code: &str,
+                macros: &HashMap<String, Vec<String>>,
+            ) -> Result<(), PrinterError> {
+                match macros.get(code) {
+                    Some(expansion) => {
+                        for extra in expansion {
+                            expand(printer, extra, macros)?;
+                        }
+                        Ok(())
+                    }
+                    None => printer.send_unsequenced(code),
+                }
+            }
+            for code in codes.iter() {
+                expand(printer, code.as_ref(), macros)?;
+            }
+        }
+        None => {
+            for line in codes {
+                printer.send_unsequenced(line.as_ref())?;
+            }
+        }
     }
+
     Ok(())
 }
 
