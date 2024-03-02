@@ -294,7 +294,7 @@ pub trait HandleCommand {
 
 pub fn send_gcodes(
     printer: &impl AsyncPrinterComm,
-    codes: &[impl AsRef<str>],
+    codes: impl IntoIterator<Item = impl AsRef<str>>,
     macros: Option<&HashMap<String, Vec<String>>>,
 ) -> Result<(), PrinterError> {
     match macros {
@@ -314,7 +314,7 @@ pub fn send_gcodes(
                     None => printer.send_unsequenced(code),
                 }
             }
-            for code in codes.iter() {
+            for code in codes {
                 expand(printer, code.as_ref(), macros)?;
             }
         }
