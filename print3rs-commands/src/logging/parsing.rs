@@ -1,4 +1,4 @@
-use crate::commands::Command;
+use {crate::commands::Command, winnow::ascii::space0};
 use winnow::{
     ascii::{alphanumeric1, float, space1},
     combinator::{alt, delimited, dispatch, empty, fail, preceded, repeat, rest},
@@ -60,7 +60,7 @@ pub fn parse_segments<'a>(input: &mut &'a str) -> PResult<Vec<Segment<'a>>> {
 
 pub fn parse_logger<'a>(input: &mut &'a str) -> PResult<Command<'a>> {
     (
-        preceded(space1, alphanumeric1),
+        preceded(space0, alphanumeric1),
         preceded(space1, parse_segments),
     )
         .map(|(name, segments)| Command::Log(name, segments))
