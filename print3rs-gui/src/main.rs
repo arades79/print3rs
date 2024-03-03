@@ -1,4 +1,6 @@
-use {print3rs_core::SerialPrinter, std::collections::HashMap};
+use {
+    print3rs_commands::commands::Macros, print3rs_core::SerialPrinter, std::collections::HashMap,
+};
 
 use iced::widget::combo_box::State as ComboState;
 use iced::widget::{button, column, combo_box, row, scrollable, text, text_input};
@@ -31,6 +33,7 @@ struct App {
     command: String,
     output: String,
     tasks: HashMap<String, BackgroundTask>,
+    macros: Macros,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -67,7 +70,7 @@ enum Message {
     ChangePort(String),
     ChangeBaud(u32),
     ToggleConnect,
-    Connected(SerialPrinter),
+    //Connected(SerialPrinter),
     CommandInput(String),
     ProcessCommand,
 }
@@ -98,6 +101,7 @@ impl iced::Application for App {
                 command: Default::default(),
                 output: Default::default(),
                 tasks: Default::default(),
+                macros: Default::default(),
             },
             iced::Command::none(),
         )
@@ -146,7 +150,8 @@ impl iced::Application for App {
                             todo!()
                         }
                         Gcodes(codes) => {
-                            if let Err(_e) = commands::send_gcodes(&self.printer, &codes) {
+                            let codes = self.macros.expand(codes);
+                            if let Err(_e) = commands::send_gcodes(&self.printer, codes) {
                                 self.output.push_str(DISCONNECTED_ERROR);
                             }
                         }
@@ -166,6 +171,7 @@ impl iced::Application for App {
                         }
                         Repeat(name, gcodes) => {
                             if let Ok(socket) = self.printer.socket() {
+                                let gcodes = self.macros.expand(gcodes);
                                 let repeat = commands::start_repeat(gcodes, socket.clone());
                                 self.tasks.insert(name.to_string(), repeat);
                             } else {
@@ -187,6 +193,24 @@ impl iced::Application for App {
                         }
                         Stop(name) => {
                             self.tasks.remove(name);
+                        }
+                        Macro(name, steps) => {
+                            if self.macros.add(name, steps).is_err() {
+                                self.output.push_str(
+                                    "Infinite recursion detected for macro! Macro was not added.\n",
+                                )
+                            }
+                        }
+                        Macros => {
+                            for (name, steps) in self.macros.iter() {
+                                self.output.push_str(name);
+                                self.output.push_str("        ");
+                                self.output.push_str(&steps.join(";"));
+                                self.output.push('\n');
+                            }
+                        }
+                        DeleteMacro(name) => {
+                            self.macros.remove(name);
                         }
                         Connect(path, baud) => {
                             if let Ok(port) =
@@ -218,9 +242,9 @@ impl iced::Application for App {
                 }
                 Command::none()
             }
-            Message::Connected(printer) => {
-                self.printer = printer;
-            },
+            // Message::Connected(printer) => {
+            //     self.printer = printer;
+            // }
             Message::ChangePort(port) => {
                 self.selected_port = Some(port);
                 Command::none()
@@ -252,40 +276,42 @@ impl iced::Application for App {
         let maybe_jog = |jogmove| self.printer.is_connected().then_some(Message::Jog(jogmove));
         column![
             row![
-                    port_list,
-                    baud_list,
-                    button(if self.printer.is_connected() {
-                        "disconnect"
-                    } else {
-                        "connect"
-                    })
-                    .on_press(Message::ToggleConnect)
-                ],
-            row![column![
-                button("Y+100.0").on_press_maybe(maybe_jog(JogMove::y(100.0))),
-                button("Y+10.0").on_press_maybe(maybe_jog(JogMove::y(10.0))),
-                button("Y+1.0").on_press_maybe(maybe_jog(JogMove::y(1.0))),
-                row![
-                    button("X-100.0").on_press_maybe(maybe_jog(JogMove::x(-100.0))),
-                    button("X-10.0").on_press_maybe(maybe_jog(JogMove::x(-10.0))),
-                    button("X-1.0").on_press_maybe(maybe_jog(JogMove::x(-1.0))),
-                    button("X+1.0").on_press_maybe(maybe_jog(JogMove::x(1.0))),
-                    button("X+10.0").on_press_maybe(maybe_jog(JogMove::x(10.0))),
-                    button("X+100.0").on_press_maybe(maybe_jog(JogMove::x(100.0)))
-                ],
-                button("Y-1.0").on_press_maybe(maybe_jog(JogMove::y(-1.0))),
-                button("Y-10.0").on_press_maybe(maybe_jog(JogMove::y(-10.0))),
-                button("Y-100.0").on_press_maybe(maybe_jog(JogMove::y(-100.0))),
-            ]
-            .align_items(iced::Alignment::Center),
-            column![
-                button("Z+10.0").on_press_maybe(maybe_jog(JogMove::z(-10.0))),
-                button("Z+1.0").on_press_maybe(maybe_jog(JogMove::z(-1.0))),
-                button("Z+0.1").on_press_maybe(maybe_jog(JogMove::z(-0.1))),
-                button("Z-0.1").on_press_maybe(maybe_jog(JogMove::z(0.1))),
-                button("Z-1.0").on_press_maybe(maybe_jog(JogMove::z(1.0))),
-                button("Z-10.0").on_press_maybe(maybe_jog(JogMove::z(10.0))),
-            ]],
+                port_list,
+                baud_list,
+                button(if self.printer.is_connected() {
+                    "disconnect"
+                } else {
+                    "connect"
+                })
+                .on_press(Message::ToggleConnect)
+            ],
+            row![
+                column![
+                    button("Y+100.0").on_press_maybe(maybe_jog(JogMove::y(100.0))),
+                    button("Y+10.0").on_press_maybe(maybe_jog(JogMove::y(10.0))),
+                    button("Y+1.0").on_press_maybe(maybe_jog(JogMove::y(1.0))),
+                    row![
+                        button("X-100.0").on_press_maybe(maybe_jog(JogMove::x(-100.0))),
+                        button("X-10.0").on_press_maybe(maybe_jog(JogMove::x(-10.0))),
+                        button("X-1.0").on_press_maybe(maybe_jog(JogMove::x(-1.0))),
+                        button("X+1.0").on_press_maybe(maybe_jog(JogMove::x(1.0))),
+                        button("X+10.0").on_press_maybe(maybe_jog(JogMove::x(10.0))),
+                        button("X+100.0").on_press_maybe(maybe_jog(JogMove::x(100.0)))
+                    ],
+                    button("Y-1.0").on_press_maybe(maybe_jog(JogMove::y(-1.0))),
+                    button("Y-10.0").on_press_maybe(maybe_jog(JogMove::y(-10.0))),
+                    button("Y-100.0").on_press_maybe(maybe_jog(JogMove::y(-100.0))),
+                ]
+                .align_items(iced::Alignment::Center),
+                column![
+                    button("Z+10.0").on_press_maybe(maybe_jog(JogMove::z(-10.0))),
+                    button("Z+1.0").on_press_maybe(maybe_jog(JogMove::z(-1.0))),
+                    button("Z+0.1").on_press_maybe(maybe_jog(JogMove::z(-0.1))),
+                    button("Z-0.1").on_press_maybe(maybe_jog(JogMove::z(0.1))),
+                    button("Z-1.0").on_press_maybe(maybe_jog(JogMove::z(1.0))),
+                    button("Z-10.0").on_press_maybe(maybe_jog(JogMove::z(10.0))),
+                ]
+            ],
             scrollable(text(&self.output))
                 .width(Length::Fill)
                 .height(Length::Fill),
