@@ -174,21 +174,21 @@ pub fn help(command: &str) -> &'static str {
 use crate::logging::parsing::{parse_logger, Segment};
 
 #[non_exhaustive]
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Command<'a> {
     Gcodes(Vec<Cow<'a, str>>),
-    Print(&'a str),
-    Log(&'a str, Vec<Segment<'a>>),
-    Repeat(&'a str, Vec<Cow<'a, str>>),
+    Print(Cow<'a, str>),
+    Log(Cow<'a, str>, Vec<Segment<'a>>),
+    Repeat(Cow<'a, str>, Vec<Cow<'a, str>>),
     Tasks,
-    Stop(&'a str),
-    Connect(&'a str, Option<u32>),
+    Stop(Cow<'a, str>),
+    Connect(Cow<'a, str>, Option<u32>),
     AutoConnect,
     Disconnect,
-    Macro(&'a str, Vec<Cow<'a, str>>),
+    Macro(Cow<'a, str>, Vec<Cow<'a, str>>),
     Macros,
-    DeleteMacro(&'a str),
-    Help(&'a str),
+    DeleteMacro(Cow<'a, str>),
+    Help(Cow<'a, str>),
     Version,
     Clear,
     Quit,
@@ -204,7 +204,7 @@ fn parse_repeater<'a>(input: &mut &'a str) -> PResult<Command<'a>> {
         preceded(space0, alphanumeric1),
         preceded(space1, parse_gcodes),
     )
-        .map(|(name, gcodes)| Command::Repeat(name, gcodes))
+        .map(|(name, gcodes)| Command::Repeat(std::borrow::Cow::Borrowed(name), gcodes))
         .parse_next(input)
 }
 
@@ -216,7 +216,7 @@ fn parse_macro<'a>(input: &mut &'a str) -> PResult<Command<'a>> {
         preceded(space1, parse_gcodes),
     )
         .parse_next(input)?;
-    Ok(Command::Macro(name, steps))
+    Ok(Command::Macro(std::borrow::Cow::Borrowed(name), steps))
 }
 
 fn inner_command<'a>(input: &mut &'a str) -> PResult<Command<'a>> {
@@ -224,17 +224,17 @@ fn inner_command<'a>(input: &mut &'a str) -> PResult<Command<'a>> {
     let command = opt(dispatch! {alpha1;
         "log" => parse_logger,
         "repeat" => parse_repeater,
-        "print" => preceded(space0, rest).map(Command::Print),
+        "print" => preceded(space0, rest).map(|s| Command::Print(std::borrow::Cow::Borrowed(s))),
         "tasks" => empty.map(|_| Command::Tasks),
-        "stop" => preceded(space0, rest).map(Command::Stop),
-        "help" => rest.map(Command::Help),
+        "stop" => preceded(space0, rest).map(|s| Command::Stop(Cow::Borrowed(s))),
+        "help" => rest.map(|s| Command::Help(Cow::Borrowed(s))),
         "version" => empty.map(|_| Command::Version),
         "autoconnect" => empty.map(|_| Command::AutoConnect),
         "disconnect" => empty.map(|_| Command::Disconnect),
-        "connect" => (preceded(space0, take_till(1.., [' '])), preceded(space0,opt(dec_uint))).map(|(path, baud)| Command::Connect(path, baud)),
+        "connect" => (preceded(space0, take_till(1.., [' '])), preceded(space0,opt(dec_uint))).map(|(path, baud)| Command::Connect(std::borrow::Cow::Borrowed(path), baud)),
         "macro" => parse_macro,
         "macros" => empty.map(|_| Command::Macros),
-        "delmacro" => preceded(space0, rest).map(Command::DeleteMacro),
+        "delmacro" => preceded(space0, rest).map(|s| Command::DeleteMacro(std::borrow::Cow::Borrowed(s))),
         "send" => preceded(space0, parse_gcodes).map(Command::Gcodes),
         "clear" => empty.map(|_| Command::Clear),
         "quit" | "exit" => empty.map(|_| Command::Quit),
@@ -344,6 +344,8 @@ pub fn start_repeat(gcodes: Vec<String>, socket: print3rs_core::Socket) -> Backg
     }
 }
 
+pub type Tasks = HashMap<String, BackgroundTask>;
+
 #[derive(Debug)]
 pub struct BackgroundTask {
     pub description: &'static str,
@@ -364,4 +366,135 @@ pub fn send_gcodes(
         printer.send_unsequenced(code.as_ref())?;
     }
     Ok(())
+}
+
+pub struct Commander {
+    pub printer: SerialPrinter,
+    tasks: Tasks,
+    macros: Macros,
+    responder: tokio::sync::broadcast::Sender<String>,
+    commands: tokio::sync::mpsc::Receiver<Command<'static>>,
+}
+#[derive(Debug, Clone)]
+struct ErrorKindOf(String);
+
+impl<T> From<T> for ErrorKindOf
+where
+    T: ToString,
+{
+    fn from(value: T) -> Self {
+        Self(value.to_string())
+    }
+}
+
+impl Commander {
+    pub fn start(mut self) -> tokio::task::JoinHandle<()> {
+        tokio::spawn(async move {
+            loop {
+                while let Some(command) = self.commands.recv().await {
+                    self.dispatch(command).await;
+                }
+            }
+        })
+    }
+    async fn dispatch(&mut self, command: Command<'_>) -> Result<(), ErrorKindOf> {
+        use Command::*;
+        const DISCONNECTED_ERROR: &str = "No printer is connected!";
+        match command {
+            Clear => {
+                todo!()
+            }
+            Quit => {
+                todo!()
+            }
+            Gcodes(codes) => {
+                let codes = self.macros.expand(codes);
+                if let Err(_e) = send_gcodes(&self.printer, codes) {
+                    self.responder.send(DISCONNECTED_ERROR.to_string())?;
+                }
+            }
+            Print(filename) => {
+                if let Ok(print) = start_print_file(&filename, &self.printer) {
+                    self.tasks.insert(filename.to_string(), print);
+                } else {
+                    self.responder.send(DISCONNECTED_ERROR.to_string())?;
+                }
+            }
+            Log(name, pattern) => {
+                if let Ok(log) = start_logging(&name, pattern, &self.printer) {
+                    self.tasks.insert(name.to_string(), log);
+                } else {
+                    self.responder.send(DISCONNECTED_ERROR.to_string())?;
+                }
+            }
+            Repeat(name, gcodes) => {
+                if let Ok(socket) = self.printer.socket() {
+                    let gcodes = self.macros.expand(gcodes);
+                    let repeat = start_repeat(gcodes, socket.clone());
+                    self.tasks.insert(name.to_string(), repeat);
+                } else {
+                    self.responder.send(DISCONNECTED_ERROR.to_string())?;
+                }
+            }
+            Tasks => {
+                for (
+                    name,
+                    BackgroundTask {
+                        description,
+                        abort_handle: _,
+                    },
+                ) in self.tasks.iter()
+                {
+                    self.responder.send(format!("{name}\t{description}\n"))?;
+                }
+            }
+            Stop(name) => {
+                self.tasks.remove(name.as_ref());
+            }
+            Macro(name, commands) => {
+                if self.macros.add(name, commands).is_err() {
+                    self.responder
+                        .send("Infinite macro detected! Macro not added.\n".to_string())?;
+                }
+            }
+            Macros => {
+                for (name, steps) in self.macros.iter() {
+                    let steps = steps.join(";");
+                    self.responder.send(format!("{name}:    {steps}"))?;
+                }
+            }
+            DeleteMacro(name) => {
+                self.macros.remove(name);
+            }
+            Connect(path, baud) => {
+                if let Ok(port) =
+                    tokio_serial::new(path, baud.unwrap_or(115200)).open_native_async()
+                {
+                    self.printer.connect(port);
+                } else {
+                    self.responder.send("Connection failed.\n".to_string())?;
+                }
+            }
+            AutoConnect => {
+                self.responder.send("Connecting...\n".to_string())?;
+                self.printer = auto_connect().await;
+                self.responder.send(if self.printer.is_connected() {
+                    "Found printer!\n".to_owned()
+                } else {
+                    "No printer found.\n".to_owned()
+                })?;
+            }
+            Disconnect => self.printer.disconnect(),
+            Help(subcommand) => {
+                self.responder.send(help(&subcommand).to_string())?;
+            }
+            Version => {
+                self.responder.send(version().to_owned())?;
+            }
+            _ => {
+                self.responder.send("Unsupported command!\n".to_string())?;
+            }
+        };
+        Ok(())
+    }
 }
