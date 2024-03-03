@@ -92,7 +92,7 @@ async fn main() -> Result<(), AppError> {
                             return Ok(());
                         }
                         commands::Command::Gcodes(codes) => {
-                            let codes = macros.expand_all(codes);
+                            let codes = macros.expand(codes);
                             if let Err(_e) = commands::send_gcodes(&printer, &codes) {
                             writer.write_all(DISCONNECTED_ERROR).await?;
                         }},
@@ -112,7 +112,7 @@ async fn main() -> Result<(), AppError> {
                         }
                         commands::Command::Repeat(name, gcodes) => {
                             if let Ok(socket) = printer.socket() {
-                                let gcodes = macros.expand_all(gcodes);
+                                let gcodes = macros.expand(gcodes);
                                 let repeat = start_repeat(gcodes, socket.clone());
                                 tasks.insert(name.to_string(), repeat);}
                             else {
@@ -137,7 +137,9 @@ async fn main() -> Result<(), AppError> {
                             tasks.remove(name);
                         }
                         commands::Command::Macro(name, commands) => {
-                            macros.add(name, commands);
+                            if macros.add(name, commands).is_err() {
+                                writer.write_all(b"Infinite macro detected! Macro not added.\n").await?;
+                            }
                         },
                         commands::Command::Macros => {
                             for (name, steps) in macros.iter() {
