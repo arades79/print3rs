@@ -1,41 +1,44 @@
 use {crate::commands::Command, winnow::ascii::space0};
 use winnow::{
-    ascii::{alphanumeric1, float, space1},
-    combinator::{alt, delimited, dispatch, empty, fail, preceded, repeat, rest},
-    prelude::*,
-    stream::AsChar,
-    token::{take, take_till, take_until},
-};
+        ascii::{alphanumeric1, float, space1},
+        combinator::{alt, delimited, dispatch, empty, fail, preceded, repeat, rest},
+        prelude::*,
+        stream::AsChar,
+        token::{take, take_till, take_until},
+    };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Segment<'a> {
-    Tag(&'a str),
+pub enum Segment<S> {
+    Tag(S),
     Escaped(char),
-    Value(&'a str),
+    Value(S),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum OwnedSegment {
-    Tag(String),
-    Escaped(char),
-    Value,
-}
-
-impl<'a> From<Segment<'a>> for OwnedSegment {
-    fn from(value: Segment<'a>) -> Self {
+impl<'a> From<Segment<&'a str>> for Segment<String> {
+    fn from(value: Segment<&'a str>) -> Self {
         match value {
-            Segment::Tag(s) => OwnedSegment::Tag(s.to_string()),
-            Segment::Escaped(c) => OwnedSegment::Escaped(c),
-            Segment::Value(_) => OwnedSegment::Value,
+            Segment::Tag(s) => Segment::Tag(s.to_string()),
+            Segment::Escaped(c) => Segment::Escaped(c),
+            Segment::Value(s) => Segment::Value(s.to_string()),
         }
     }
 }
 
-fn parse_tag<'a>(input: &mut &'a str) -> PResult<Segment<'a>> {
+impl<'a> From<&'a Segment<String>> for Segment<&'a str> {
+    fn from(value: &'a Segment<String>) -> Self {
+        match value {
+            Segment::Tag(s) => Segment::Tag(s.as_ref()),
+            Segment::Escaped(c) => Segment::Escaped(*c),
+            Segment::Value(s) => Segment::Value(s.as_ref()),
+        }
+    }
+}
+
+fn parse_tag<'a>(input: &mut &'a str) -> PResult<Segment<&'a str>> {
     Ok(Segment::Tag(take_till(1.., ('{', '}')).parse_next(input)?))
 }
 
-fn parse_escape<'a>(input: &mut &'a str) -> PResult<Segment<'a>> {
+fn parse_escape<'a>(input: &mut &'a str) -> PResult<Segment<&'a str>> {
     dispatch! {take(2usize);
     "{{" => empty.map(|_| Segment::Escaped('{')),
     "}}" => empty.map(|_| Segment::Escaped('}')),
@@ -44,21 +47,21 @@ fn parse_escape<'a>(input: &mut &'a str) -> PResult<Segment<'a>> {
     .parse_next(input)
 }
 
-fn parse_value<'a>(input: &mut &'a str) -> PResult<Segment<'a>> {
+fn parse_value<'a>(input: &mut &'a str) -> PResult<Segment<&'a str>> {
     Ok(Segment::Value(
         delimited("{", alphanumeric1.recognize(), "}").parse_next(input)?,
     ))
 }
 
-fn parse_segment<'a>(input: &mut &'a str) -> PResult<Segment<'a>> {
+fn parse_segment<'a>(input: &mut &'a str) -> PResult<Segment<&'a str>> {
     alt((parse_tag, parse_escape, parse_value)).parse_next(input)
 }
 
-pub fn parse_segments<'a>(input: &mut &'a str) -> PResult<Vec<Segment<'a>>> {
+pub fn parse_segments<'a>(input: &mut &'a str) -> PResult<Vec<Segment<&'a str>>> {
     repeat(1.., parse_segment).parse_next(input)
 }
 
-pub fn parse_logger<'a>(input: &mut &'a str) -> PResult<Command<'a>> {
+pub fn parse_logger<'a>(input: &mut &'a str) -> PResult<Command<&'a str>> {
     (
         preceded(space0, alphanumeric1),
         preceded(space1, parse_segments),
@@ -67,26 +70,26 @@ pub fn parse_logger<'a>(input: &mut &'a str) -> PResult<Command<'a>> {
         .parse_next(input)
 }
 
-pub fn make_parser(segments: Vec<Segment<'_>>) -> impl FnMut(&mut &[u8]) -> PResult<Vec<f32>> {
+pub fn make_parser(segments: Vec<Segment<&'_ str>>) -> impl FnMut(&mut &[u8]) -> PResult<Vec<f32>> {
     let segments = segments
         .into_iter()
-        .map(|segment| OwnedSegment::from(segment.to_owned()))
-        .collect::<Vec<_>>();
+        .map(|segment| segment.into())
+        .collect::<Vec<Segment<String>>>();
     move |input: &mut &[u8]| -> PResult<Vec<f32>> {
         let mut values = vec![];
 
         // skips up to pattern start
         if let Some(first) = segments.first() {
             match first {
-                OwnedSegment::Tag(tag) => {
+                Segment::Tag(tag) => {
                     take_until(0.., tag.as_bytes()).void().parse_next(input)?;
                 }
-                OwnedSegment::Escaped(c) => {
+                Segment::Escaped(c) => {
                     take_till(0.., |i| (*c as u8) == i)
                         .void()
                         .parse_next(input)?;
                 }
-                OwnedSegment::Value => {
+                Segment::Value(_) => {
                     take_till(0.., |i: u8| i.is_dec_digit() || [b'.', b'-'].contains(&i))
                         .void()
                         .parse_next(input)?;
@@ -95,13 +98,13 @@ pub fn make_parser(segments: Vec<Segment<'_>>) -> impl FnMut(&mut &[u8]) -> PRes
         }
         for segment in segments.iter() {
             match segment {
-                OwnedSegment::Tag(ref s) => {
+                Segment::Tag(ref s) => {
                     s.as_bytes().parse_next(input)?;
                 }
-                OwnedSegment::Escaped(mut c) => {
+                Segment::Escaped(mut c) => {
                     c.parse_next(input)?;
                 }
-                OwnedSegment::Value => {
+                Segment::Value(_) => {
                     values.push(float.parse_next(input)?);
                 }
             };
@@ -112,11 +115,11 @@ pub fn make_parser(segments: Vec<Segment<'_>>) -> impl FnMut(&mut &[u8]) -> PRes
     }
 }
 
-pub fn get_headers(segments: &[Segment]) -> String {
+pub fn get_headers(segments: &[Segment<impl AsRef<str>>]) -> String {
     let mut s = String::new();
     for segment in segments {
         if let Segment::Value(label) = segment {
-            s.push_str(label);
+            s.push_str(label.as_ref());
             s.push(',');
         }
     }
@@ -136,7 +139,7 @@ mod tests {
     #[test]
     fn test_parse_segments() {
         let input = " this {is}so12.?me{segm2ents}";
-        let expected: &[Segment] = &[
+        let expected: &[Segment<&str>] = &[
             Tag(" this "),
             Value("is"),
             Tag("so12.?me"),

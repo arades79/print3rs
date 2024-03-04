@@ -1,4 +1,4 @@
-use std::{borrow::Cow, collections::HashMap, time::Duration};
+use std::{collections::HashMap, time::Duration};
 
 use winnow::{
     ascii::{alpha1, alphanumeric1, dec_uint, space0, space1},
@@ -155,8 +155,12 @@ disconnect                    disconnect from printer
 quit                          exit program
 \n";
 
-pub fn help(command: &str) -> &'static str {
-    let command = command.trim().strip_prefix(':').unwrap_or(command.trim());
+pub fn help(command: impl AsRef<str>) -> &'static str {
+    let command = command
+        .as_ref()
+        .trim()
+        .strip_prefix(':')
+        .unwrap_or(command.as_ref().trim());
     match command {
         "send" => "send: explicitly send one or more commands (separated by gcode comment character `;`) commands to the printer, no uppercasing or additional parsing is performed. This can be used to send commands to the printer that would otherwise be detected as a console command.\n",
         "print" => "print: execute every line of G-code sequentially from the given file. The print job is added as a task which runs in the background with the filename as the task name. Other commands can be sent while a print is running, and a print can be stopped at any time with `stop`\n",
@@ -175,40 +179,108 @@ use crate::logging::parsing::{parse_logger, Segment};
 
 #[non_exhaustive]
 #[derive(Debug, Clone)]
-pub enum Command<'a> {
-    Gcodes(Vec<Cow<'a, str>>),
-    Print(Cow<'a, str>),
-    Log(Cow<'a, str>, Vec<Segment<'a>>),
-    Repeat(Cow<'a, str>, Vec<Cow<'a, str>>),
+pub enum Command<S> {
+    Gcodes(Vec<S>),
+    Print(S),
+    Log(S, Vec<Segment<S>>),
+    Repeat(S, Vec<S>),
     Tasks,
-    Stop(Cow<'a, str>),
-    Connect(Cow<'a, str>, Option<u32>),
+    Stop(S),
+    Connect(S, Option<u32>),
     AutoConnect,
     Disconnect,
-    Macro(Cow<'a, str>, Vec<Cow<'a, str>>),
+    Macro(S, Vec<S>),
     Macros,
-    DeleteMacro(Cow<'a, str>),
-    Help(Cow<'a, str>),
+    DeleteMacro(S),
+    Help(S),
     Version,
     Clear,
     Quit,
     Unrecognized,
 }
 
-fn parse_gcodes<'a>(input: &mut &'a str) -> PResult<Vec<Cow<'a, str>>> {
-    separated(0.., take_till(1.., ';').map(Cow::Borrowed), ';').parse_next(input)
+impl<'a> From<Command<&'a str>> for Command<String> {
+    fn from(command: Command<&'a str>) -> Self {
+        use Command::*;
+        match command {
+            Gcodes(codes) => Gcodes(codes.into_iter().map(ToOwned::to_owned).collect()),
+            Print(filename) => Print(filename.to_owned()),
+            Log(name, pattern) => Log(
+                name.to_owned(),
+                pattern.into_iter().map(|s| s.into()).collect(),
+            ),
+            Repeat(name, codes) => Repeat(
+                name.to_owned(),
+                codes.into_iter().map(ToOwned::to_owned).collect(),
+            ),
+            Tasks => Tasks,
+            Stop(s) => Stop(s.to_string()),
+            Connect(path, baud) => Connect(path.to_string(), baud),
+            AutoConnect => AutoConnect,
+            Disconnect => Disconnect,
+            Macro(name, codes) => Macro(
+                name.to_string(),
+                codes.into_iter().map(ToOwned::to_owned).collect(),
+            ),
+            Macros => Macros,
+            DeleteMacro(s) => DeleteMacro(s.to_owned()),
+            Help(s) => Help(s.to_owned()),
+            Version => Version,
+            Clear => Clear,
+            Quit => Quit,
+            Unrecognized => Unrecognized,
+        }
+    }
 }
 
-fn parse_repeater<'a>(input: &mut &'a str) -> PResult<Command<'a>> {
+impl<'a> From<&'a Command<String>> for Command<&'a str> {
+    fn from(command: &'a Command<String>) -> Self {
+        use Command::*;
+        match command {
+            Gcodes(codes) => Gcodes(codes.iter().map(|s| s.as_str()).collect()),
+            Print(filename) => Print(filename.as_str()),
+            Log(name, pattern) => Log(
+                name.as_str(),
+                pattern.iter().map(|s| s.into()).collect(),
+            ),
+            Repeat(name, codes) => Repeat(
+                name.as_str(),
+                codes.iter().map(|s| s.as_str()).collect(),
+            ),
+            Tasks => Tasks,
+            Stop(s) => Stop(s.as_str()),
+            Connect(path, baud) => Connect(path.as_str(), *baud),
+            AutoConnect => AutoConnect,
+            Disconnect => Disconnect,
+            Macro(name, codes) => Macro(
+                name.as_str(),
+                codes.iter().map(|s| s.as_str()).collect(),
+            ),
+            Macros => Macros,
+            DeleteMacro(s) => DeleteMacro(s.as_str()),
+            Help(s) => Help(s.as_str()),
+            Version => Version,
+            Clear => Clear,
+            Quit => Quit,
+            Unrecognized => Unrecognized,
+        }
+    }
+}
+
+fn parse_gcodes<'a>(input: &mut &'a str) -> PResult<Vec<&'a str>> {
+    separated(0.., take_till(1.., ';'), ';').parse_next(input)
+}
+
+fn parse_repeater<'a>(input: &mut &'a str) -> PResult<Command<&'a str>> {
     (
         preceded(space0, alphanumeric1),
         preceded(space1, parse_gcodes),
     )
-        .map(|(name, gcodes)| Command::Repeat(std::borrow::Cow::Borrowed(name), gcodes))
+        .map(|(name, gcodes)| Command::Repeat(name, gcodes))
         .parse_next(input)
 }
 
-fn parse_macro<'a>(input: &mut &'a str) -> PResult<Command<'a>> {
+fn parse_macro<'a>(input: &mut &'a str) -> PResult<Command<&'a str>> {
     let alpha_no_reserved_start =
         alpha1.verify(|s: &str| !s.starts_with(|c: char| "GTMND".contains(c.to_ascii_uppercase())));
     let (name, steps) = (
@@ -216,25 +288,25 @@ fn parse_macro<'a>(input: &mut &'a str) -> PResult<Command<'a>> {
         preceded(space1, parse_gcodes),
     )
         .parse_next(input)?;
-    Ok(Command::Macro(std::borrow::Cow::Borrowed(name), steps))
+    Ok(Command::Macro(name, steps))
 }
 
-fn inner_command<'a>(input: &mut &'a str) -> PResult<Command<'a>> {
+fn inner_command<'a>(input: &mut &'a str) -> PResult<Command<&'a str>> {
     let explicit = opt(":").parse_next(input)?;
     let command = opt(dispatch! {alpha1;
         "log" => parse_logger,
         "repeat" => parse_repeater,
-        "print" => preceded(space0, rest).map(|s| Command::Print(std::borrow::Cow::Borrowed(s))),
+        "print" => preceded(space0, rest).map(Command::Print),
         "tasks" => empty.map(|_| Command::Tasks),
-        "stop" => preceded(space0, rest).map(|s| Command::Stop(Cow::Borrowed(s))),
-        "help" => rest.map(|s| Command::Help(Cow::Borrowed(s))),
+        "stop" => preceded(space0, rest).map(Command::Stop),
+        "help" => rest.map(Command::Help),
         "version" => empty.map(|_| Command::Version),
         "autoconnect" => empty.map(|_| Command::AutoConnect),
         "disconnect" => empty.map(|_| Command::Disconnect),
-        "connect" => (preceded(space0, take_till(1.., [' '])), preceded(space0,opt(dec_uint))).map(|(path, baud)| Command::Connect(std::borrow::Cow::Borrowed(path), baud)),
+        "connect" => (preceded(space0, take_till(1.., [' '])), preceded(space0,opt(dec_uint))).map(|(path, baud)| Command::Connect(path, baud)),
         "macro" => parse_macro,
         "macros" => empty.map(|_| Command::Macros),
-        "delmacro" => preceded(space0, rest).map(|s| Command::DeleteMacro(std::borrow::Cow::Borrowed(s))),
+        "delmacro" => preceded(space0, rest).map(Command::DeleteMacro),
         "send" => preceded(space0, parse_gcodes).map(Command::Gcodes),
         "clear" => empty.map(|_| Command::Clear),
         "quit" | "exit" => empty.map(|_| Command::Quit),
@@ -248,14 +320,11 @@ fn inner_command<'a>(input: &mut &'a str) -> PResult<Command<'a>> {
     }
 }
 
-pub fn parse_command<'a>(input: &mut &'a str) -> PResult<Command<'a>> {
+pub fn parse_command<'a>(input: &mut &'a str) -> PResult<Command<&'a str>> {
     alt((
         inner_command,
         parse_gcodes.map(|gcodes| {
-            let gcodes = gcodes
-                .into_iter()
-                .map(|s| Cow::Owned(s.to_ascii_uppercase()))
-                .collect();
+            let gcodes = gcodes.into_iter().collect();
             Command::Gcodes(gcodes)
         }),
     ))
@@ -292,7 +361,7 @@ enum TaskError {
 
 pub fn start_logging<Transport>(
     name: &str,
-    pattern: Vec<crate::logging::parsing::Segment<'_>>,
+    pattern: Vec<crate::logging::parsing::Segment<&'_ str>>,
     printer: &Printer<Transport>,
 ) -> std::result::Result<BackgroundTask, print3rs_core::Error> {
     let filename = format!(
@@ -373,7 +442,7 @@ pub struct Commander {
     tasks: Tasks,
     macros: Macros,
     responder: tokio::sync::broadcast::Sender<String>,
-    commands: tokio::sync::mpsc::Receiver<Command<'static>>,
+    commands: tokio::sync::mpsc::Receiver<Command<String>>,
 }
 #[derive(Debug, Clone)]
 struct ErrorKindOf(String);
@@ -392,12 +461,13 @@ impl Commander {
         tokio::spawn(async move {
             loop {
                 while let Some(command) = self.commands.recv().await {
-                    self.dispatch(command).await;
+                    self.dispatch(&command).await;
                 }
             }
         })
     }
-    async fn dispatch(&mut self, command: Command<'_>) -> Result<(), ErrorKindOf> {
+    async fn dispatch(&mut self, command: impl Into<Command<&'_ str>>) -> Result<(), ErrorKindOf> {
+        let command = command.into();
         use Command::*;
         const DISCONNECTED_ERROR: &str = "No printer is connected!";
         match command {
@@ -414,14 +484,14 @@ impl Commander {
                 }
             }
             Print(filename) => {
-                if let Ok(print) = start_print_file(&filename, &self.printer) {
+                if let Ok(print) = start_print_file(filename, &self.printer) {
                     self.tasks.insert(filename.to_string(), print);
                 } else {
                     self.responder.send(DISCONNECTED_ERROR.to_string())?;
                 }
             }
             Log(name, pattern) => {
-                if let Ok(log) = start_logging(&name, pattern, &self.printer) {
+                if let Ok(log) = start_logging(name, pattern, &self.printer) {
                     self.tasks.insert(name.to_string(), log);
                 } else {
                     self.responder.send(DISCONNECTED_ERROR.to_string())?;
@@ -449,7 +519,7 @@ impl Commander {
                 }
             }
             Stop(name) => {
-                self.tasks.remove(name.as_ref());
+                self.tasks.remove(name);
             }
             Macro(name, commands) => {
                 if self.macros.add(name, commands).is_err() {
@@ -486,7 +556,7 @@ impl Commander {
             }
             Disconnect => self.printer.disconnect(),
             Help(subcommand) => {
-                self.responder.send(help(&subcommand).to_string())?;
+                self.responder.send(help(subcommand).to_string())?;
             }
             Version => {
                 self.responder.send(version().to_owned())?;
