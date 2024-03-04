@@ -1,4 +1,7 @@
-use std::{collections::HashMap, time::Duration};
+use {
+    core::borrow::Borrow,
+    std::{collections::HashMap, time::Duration},
+};
 
 use winnow::{
     ascii::{alpha1, alphanumeric1, dec_uint, space0, space1},
@@ -199,10 +202,13 @@ pub enum Command<S> {
     Unrecognized,
 }
 
-impl<'a> From<Command<&'a str>> for Command<String> {
-    fn from(command: Command<&'a str>) -> Self {
+impl<'a, S: ToOwned + ?Sized> Command<&'a S> {
+    pub fn into_owned(self) -> Command<S::Owned>
+    where
+        Segment<S::Owned>: From<Segment<&'a S>>,
+    {
         use Command::*;
-        match command {
+        match self {
             Gcodes(codes) => Gcodes(codes.into_iter().map(ToOwned::to_owned).collect()),
             Print(filename) => Print(filename.to_owned()),
             Log(name, pattern) => Log(
@@ -214,12 +220,12 @@ impl<'a> From<Command<&'a str>> for Command<String> {
                 codes.into_iter().map(ToOwned::to_owned).collect(),
             ),
             Tasks => Tasks,
-            Stop(s) => Stop(s.to_string()),
-            Connect(path, baud) => Connect(path.to_string(), baud),
+            Stop(s) => Stop(s.to_owned()),
+            Connect(path, baud) => Connect(path.to_owned(), baud),
             AutoConnect => AutoConnect,
             Disconnect => Disconnect,
             Macro(name, codes) => Macro(
-                name.to_string(),
+                name.to_owned(),
                 codes.into_iter().map(ToOwned::to_owned).collect(),
             ),
             Macros => Macros,
@@ -231,6 +237,73 @@ impl<'a> From<Command<&'a str>> for Command<String> {
             Unrecognized => Unrecognized,
         }
     }
+    pub fn into_box(self) -> Command<Box<S>>
+    where
+        Box<S>: From<&'a S>,
+    {
+        use Command::*;
+        match self {
+            Gcodes(codes) => Gcodes(codes.into_iter().map(|s| s.into()).collect()),
+            Print(filename) => Print(filename.into()),
+            Log(name, pattern) => Log(name.into(), pattern.into_iter().map(|s| s.into()).collect()),
+            Repeat(name, codes) => {
+                Repeat(name.into(), codes.into_iter().map(|s| s.into()).collect())
+            }
+            Tasks => Tasks,
+            Stop(s) => Stop(s.into()),
+            Connect(path, baud) => Connect(path.into(), baud),
+            AutoConnect => AutoConnect,
+            Disconnect => Disconnect,
+            Macro(name, codes) => Macro(name.into(), codes.into_iter().map(|s| s.into()).collect()),
+            Macros => Macros,
+            DeleteMacro(s) => DeleteMacro(s.into()),
+            Help(s) => Help(s.into()),
+            Version => Version,
+            Clear => Clear,
+            Quit => Quit,
+            Unrecognized => Unrecognized,
+        }
+    }
+}
+
+impl<S> Command<S> {
+    pub fn to_borrowed<'a, Borrowed: ?Sized>(&'a self) -> Command<&'a Borrowed>
+    where
+        S: Borrow<Borrowed>,
+        Segment<&'a Borrowed>: From<Segment<S>>,
+    {
+        use Command::*;
+        match self {
+            Gcodes(codes) => Gcodes(codes.iter().map(|s| s.borrow()).collect()),
+            Print(filename) => Print(filename.borrow()),
+            Log(name, pattern) => Log(
+                name.borrow(),
+                pattern.iter().map(|s| s.to_borrowed()).collect(),
+            ),
+            Repeat(name, codes) => {
+                Repeat(name.borrow(), codes.iter().map(|s| s.borrow()).collect())
+            }
+            Tasks => Tasks,
+            Stop(s) => Stop(s.borrow()),
+            Connect(path, baud) => Connect(path.borrow(), *baud),
+            AutoConnect => AutoConnect,
+            Disconnect => Disconnect,
+            Macro(name, codes) => Macro(name.borrow(), codes.iter().map(|s| s.borrow()).collect()),
+            Macros => Macros,
+            DeleteMacro(s) => DeleteMacro(s.borrow()),
+            Help(s) => Help(s.borrow()),
+            Version => Version,
+            Clear => Clear,
+            Quit => Quit,
+            Unrecognized => Unrecognized,
+        }
+    }
+}
+
+impl<'a> From<Command<&'a str>> for Command<String> {
+    fn from(command: Command<&'a str>) -> Self {
+        command.into_owned()
+    }
 }
 
 impl<'a> From<&'a Command<String>> for Command<&'a str> {
@@ -239,23 +312,16 @@ impl<'a> From<&'a Command<String>> for Command<&'a str> {
         match command {
             Gcodes(codes) => Gcodes(codes.iter().map(|s| s.as_str()).collect()),
             Print(filename) => Print(filename.as_str()),
-            Log(name, pattern) => Log(
-                name.as_str(),
-                pattern.iter().map(|s| s.into()).collect(),
-            ),
-            Repeat(name, codes) => Repeat(
-                name.as_str(),
-                codes.iter().map(|s| s.as_str()).collect(),
-            ),
+            Log(name, pattern) => Log(name.as_str(), pattern.iter().map(|s| s.into()).collect()),
+            Repeat(name, codes) => {
+                Repeat(name.as_str(), codes.iter().map(|s| s.as_str()).collect())
+            }
             Tasks => Tasks,
             Stop(s) => Stop(s.as_str()),
             Connect(path, baud) => Connect(path.as_str(), *baud),
             AutoConnect => AutoConnect,
             Disconnect => Disconnect,
-            Macro(name, codes) => Macro(
-                name.as_str(),
-                codes.iter().map(|s| s.as_str()).collect(),
-            ),
+            Macro(name, codes) => Macro(name.as_str(), codes.iter().map(|s| s.as_str()).collect()),
             Macros => Macros,
             DeleteMacro(s) => DeleteMacro(s.as_str()),
             Help(s) => Help(s.as_str()),
@@ -439,8 +505,8 @@ pub fn send_gcodes(
 
 pub struct Commander {
     pub printer: SerialPrinter,
-    tasks: Tasks,
-    macros: Macros,
+    pub tasks: Tasks,
+    pub macros: Macros,
     responder: tokio::sync::broadcast::Sender<String>,
     commands: tokio::sync::mpsc::Receiver<Command<String>>,
 }
@@ -461,7 +527,10 @@ impl Commander {
         tokio::spawn(async move {
             loop {
                 while let Some(command) = self.commands.recv().await {
-                    self.dispatch(&command).await;
+                    if let Err(e) = self.dispatch(&command).await {
+                        let e = e.0;
+                        let _ = self.responder.send(format!("Error: {e}"));
+                    }
                 }
             }
         })

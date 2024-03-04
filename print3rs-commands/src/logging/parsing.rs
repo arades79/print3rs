@@ -1,11 +1,11 @@
-use {crate::commands::Command, winnow::ascii::space0};
 use winnow::{
-        ascii::{alphanumeric1, float, space1},
-        combinator::{alt, delimited, dispatch, empty, fail, preceded, repeat, rest},
-        prelude::*,
-        stream::AsChar,
-        token::{take, take_till, take_until},
-    };
+    ascii::{alphanumeric1, float, space1},
+    combinator::{alt, delimited, dispatch, empty, fail, preceded, repeat, rest},
+    prelude::*,
+    stream::AsChar,
+    token::{take, take_till, take_until},
+};
+use {crate::commands::Command, core::borrow::Borrow, winnow::ascii::space0};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Segment<S> {
@@ -14,12 +14,38 @@ pub enum Segment<S> {
     Value(S),
 }
 
+impl<S> Segment<S> {
+    pub fn to_borrowed<'a, B: ?Sized>(&'a self) -> Segment<&'a B>
+    where
+        S: Borrow<B>,
+    {
+        match self {
+            Segment::Tag(s) => Segment::Tag(s.borrow()),
+            Segment::Escaped(c) => Segment::Escaped(*c),
+            Segment::Value(s) => Segment::Value(s.borrow()),
+        }
+    }
+}
+
 impl<'a> From<Segment<&'a str>> for Segment<String> {
     fn from(value: Segment<&'a str>) -> Self {
         match value {
             Segment::Tag(s) => Segment::Tag(s.to_string()),
             Segment::Escaped(c) => Segment::Escaped(c),
             Segment::Value(s) => Segment::Value(s.to_string()),
+        }
+    }
+}
+
+impl<'a, S: ?Sized> From<Segment<&'a S>> for Segment<Box<S>>
+where
+    Box<S>: From<&'a S>,
+{
+    fn from(value: Segment<&'a S>) -> Self {
+        match value {
+            Segment::Tag(s) => Segment::Tag(s.into()),
+            Segment::Escaped(c) => Segment::Escaped(c),
+            Segment::Value(s) => Segment::Value(s.into()),
         }
     }
 }
