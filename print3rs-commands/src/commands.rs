@@ -1,5 +1,6 @@
 use {
     core::borrow::Borrow,
+    std::sync::Arc,
     std::{collections::HashMap, time::Duration},
 };
 
@@ -104,7 +105,7 @@ impl Macros {
         for code in codes {
             match self.get(&code) {
                 Some(expansion) => expanded.extend(expansion.iter().cloned()),
-                None => expanded.push(code.as_ref().to_string()),
+                None => expanded.push(code.as_ref().to_ascii_uppercase()),
             }
         }
         expanded
@@ -503,11 +504,13 @@ pub fn send_gcodes(
     Ok(())
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Response {
     Output(String),
     Error(ErrorKindOf),
-    AutoConnect(SerialPrinter),
+    AutoConnect(Arc<SerialPrinter>),
+    Clear,
+    Quit,
 }
 
 impl From<String> for Response {
@@ -530,12 +533,13 @@ impl From<ErrorKindOf> for Response {
 
 impl From<SerialPrinter> for Response {
     fn from(value: SerialPrinter) -> Self {
-        Response::AutoConnect(value)
+        Response::AutoConnect(Arc::new(value))
     }
 }
 
 type CommandReceiver = tokio::sync::mpsc::Receiver<Command<String>>;
 type ResponseSender = tokio::sync::broadcast::Sender<Response>;
+type ResponseReceiver = tokio::sync::broadcast::Receiver<Response>;
 
 pub struct Commander {
     pub printer: SerialPrinter,
@@ -544,7 +548,7 @@ pub struct Commander {
     pub responder: ResponseSender,
 }
 #[derive(Debug, Clone)]
-struct ErrorKindOf(String);
+pub struct ErrorKindOf(pub String);
 
 impl<T> From<T> for ErrorKindOf
 where
@@ -555,7 +559,27 @@ where
     }
 }
 
+impl Default for Commander {
+    fn default() -> Self {
+        Commander::new()
+    }
+}
+
 impl Commander {
+    pub fn new() -> Self {
+        let (responder, _) = tokio::sync::broadcast::channel(32);
+        Self {
+            printer: Default::default(),
+            responder,
+            tasks: Default::default(),
+            macros: Default::default(),
+        }
+    }
+
+    pub fn subscribe_responses(&self) -> ResponseReceiver {
+        self.responder.subscribe()
+    }
+
     pub fn background(mut self, mut commands: CommandReceiver) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
             loop {
@@ -568,16 +592,19 @@ impl Commander {
             }
         })
     }
-    fn dispatch<'a>(&'a mut self, command: impl Into<Command<&'a str>>) -> Result<(), ErrorKindOf> {
+    pub fn dispatch<'a>(
+        &'a mut self,
+        command: impl Into<Command<&'a str>>,
+    ) -> Result<(), ErrorKindOf> {
         let command = command.into();
         use Command::*;
         const DISCONNECTED_ERROR: &str = "No printer is connected!";
         match command {
             Clear => {
-                todo!()
+                self.responder.send(Response::Clear)?;
             }
             Quit => {
-                todo!()
+                self.responder.send(Response::Quit)?;
             }
             Gcodes(codes) => {
                 let codes = self.macros.expand(codes);

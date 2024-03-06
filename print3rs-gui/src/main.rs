@@ -111,6 +111,10 @@ impl iced::Application for App {
         "Print3rs".to_string()
     }
 
+    fn subscription(&self) -> iced::Subscription<Self::Message> {
+        
+    }
+
     fn update(&mut self, message: Self::Message) -> iced::Command<Self::Message> {
         match message {
             Message::Jog(JogMove { x, y, z }) => {

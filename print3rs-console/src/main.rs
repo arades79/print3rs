@@ -5,6 +5,7 @@
 use {
     print3rs_commands::commands::{start_repeat, BackgroundTask},
     print3rs_core::{AsyncPrinterComm, Printer, SerialPrinter},
+    std::sync::Arc,
     std::{collections::HashMap, fmt::Debug},
     tokio_serial::SerialPortBuilderExt,
 };
@@ -54,9 +55,9 @@ fn setup_logging(writer: SharedWriter) {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), AppError> {
-    let mut printer = Printer::default();
+    let mut commander = commands::Commander::new();
 
-    let (mut readline, mut writer) = Readline::new(prompt_string(&printer))?;
+    let (mut readline, mut writer) = Readline::new(prompt_string(&commander.printer))?;
 
     writer.write_all(commands::version().as_bytes()).await?;
     writer
@@ -64,14 +65,40 @@ async fn main() -> Result<(), AppError> {
         .await?;
     setup_logging(writer.clone());
 
-    let mut tasks = HashMap::new();
-    let mut macros = commands::Macros::new();
+    let mut responses = commander.subscribe_responses();
 
     loop {
         tokio::select! {
-            Ok(response) = printer.read_next_line() => {
+            Ok(response) = commander.printer.read_next_line() => {
                 writer.write_all(&response).await?;
             },
+            Ok(response) = responses.recv() => {
+                match response {
+                    commands::Response::Output(s) => {
+                        writer.write_all(s.as_bytes()).await?;
+                    },
+                    commands::Response::Error(e) => {
+                        writer.write_all(format!("Error: {}", e.0).as_bytes()).await?;
+                    },
+                    commands::Response::AutoConnect(a_printer) => {
+                        commander.printer = Arc::into_inner(a_printer).unwrap_or_default();
+                        writer.write_all(
+                            if commander.printer.is_connected() {
+                                b"Found printer!\n"
+                            } else {
+                                b"No printer found.\n"
+                            }
+                        ).await?;
+                    },
+                    commands::Response::Clear => {
+                        readline.clear()?;
+                    },
+                    commands::Response::Quit => {
+                        readline.flush()?;
+                        return Ok(());
+                    },
+                }
+            }
             Ok(event) = readline.readline() => {
                 let line = match event {
                     ReadlineEvent::Line(line) => line,
@@ -84,106 +111,10 @@ async fn main() -> Result<(), AppError> {
                         continue;
                     }
                 };
-                const DISCONNECTED_ERROR: &[u8] = b"No printer connected!\n";
-                 match command {
-                        commands::Command::Clear => {readline.clear()?;},
-                        commands::Command::Quit => {
-                            readline.flush()?;
-                            return Ok(());
-                        }
-                        commands::Command::Gcodes(codes) => {
-                            let codes = macros.expand(codes);
-                            if let Err(_e) = commands::send_gcodes(&printer, &codes) {
-                            writer.write_all(DISCONNECTED_ERROR).await?;
-                        }},
-                        commands::Command::Print(filename) => {
-                            if let Ok(print) = commands::start_print_file(filename, &printer) {
-                            tasks.insert(filename.to_string(), print);
-                            } else {
-                                writer.write_all(DISCONNECTED_ERROR).await?;
-                            }
-                        }
-                        commands::Command::Log(name, pattern) => {
-                            if let Ok(log) = commands::start_logging(name, pattern, &printer) {
-                            tasks.insert(name.to_string(), log);
-                            } else {
-                                writer.write_all(DISCONNECTED_ERROR).await?;
-                            }
-                        }
-                        commands::Command::Repeat(name, gcodes) => {
-                            if let Ok(socket) = printer.socket() {
-                                let gcodes = macros.expand(gcodes);
-                                let repeat = start_repeat(gcodes, socket.clone());
-                                tasks.insert(name.to_string(), repeat);}
-                            else {
-                                writer.write_all(DISCONNECTED_ERROR).await?;
-                            }
-                        }
-                        commands::Command::Tasks => {
-                            for (
-                                name,
-                                BackgroundTask {
-                                    description,
-                                    abort_handle: _,
-                                },
-                            ) in tasks.iter()
-                            {
-                                writer
-                                    .write_all(format!("{name}\t{description}\n").as_bytes())
-                                    .await?;
-                            }
-                        }
-                        commands::Command::Stop(name) => {
-                            tasks.remove(name);
-                        }
-                        commands::Command::Macro(name, commands) => {
-                            if macros.add(name, commands).is_err() {
-                                writer.write_all(b"Infinite macro detected! Macro not added.\n").await?;
-                            }
-                        },
-                        commands::Command::Macros => {
-                            for (name, steps) in macros.iter() {
-                                writer.write_all(name.as_bytes()).await?;
-                                writer.write_all(b"\t").await?;
-                                for step in steps {
-                                    writer.write_all(step.as_bytes()).await?;
-                                    writer.write_all(b";").await?;
-                                }
-                                writer.write_all(b"\n").await?;
-                            }
-                        }
-                        commands::Command::DeleteMacro(name) => {
-                            macros.remove(name);
-                        }
-                        commands::Command::Connect(path, baud) => {
-                            if let Ok(port) = tokio_serial::new(path, baud.unwrap_or(115200)).open_native_async() {
-                            printer.connect(port);
-                            } else {
-                                writer.write_all(b"Connection failed.\n").await?;
-                            }
-                        }
-                        commands::Command::AutoConnect => {
-                            writer.write_all(b"Connecting...\n").await?;
-                            printer = commands::auto_connect().await;
-                            writer.write_all(if printer.is_connected() {b"Found printer!\n"} else {b"No printer found.\n"}).await?;
-                        }
-                        commands::Command::Disconnect => printer.disconnect(),
-                        commands::Command::Help(subcommand) => {
-                            writer
-                                .write_all(commands::help(subcommand).as_bytes())
-                                .await?
-                        }
-                        commands::Command::Version => writer.write_all(commands::version().as_bytes()).await?,
-                        _ => {
-                            writer
-                                .write_all(b"Unsupported command!\n")
-                                .await?
-                        }
-                    };
-
+                let _ = commander.dispatch(command);
                 readline.add_history_entry(line);
             },
         }
-        readline.update_prompt(&prompt_string(&printer))?;
+        readline.update_prompt(&prompt_string(&commander.printer))?;
     }
 }
