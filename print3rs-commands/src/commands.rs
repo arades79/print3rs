@@ -503,12 +503,14 @@ pub fn send_gcodes(
     Ok(())
 }
 
+type CommandReceiver = tokio::sync::mpsc::Receiver<Command<String>>;
+type ResponseSender = tokio::sync::broadcast::Sender<String>;
+
 pub struct Commander {
     pub printer: SerialPrinter,
     pub tasks: Tasks,
     pub macros: Macros,
-    responder: tokio::sync::broadcast::Sender<String>,
-    commands: tokio::sync::mpsc::Receiver<Command<String>>,
+    pub responder: ResponseSender,
 }
 #[derive(Debug, Clone)]
 struct ErrorKindOf(String);
@@ -523,10 +525,10 @@ where
 }
 
 impl Commander {
-    pub fn start(mut self) -> tokio::task::JoinHandle<()> {
+    pub fn background(mut self, mut commands: CommandReceiver) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
             loop {
-                while let Some(command) = self.commands.recv().await {
+                while let Some(command) = commands.recv().await {
                     if let Err(e) = self.dispatch(&command).await {
                         let e = e.0;
                         let _ = self.responder.send(format!("Error: {e}"));
@@ -609,12 +611,14 @@ impl Commander {
                 if let Ok(port) =
                     tokio_serial::new(path, baud.unwrap_or(115200)).open_native_async()
                 {
+                    self.tasks.clear();
                     self.printer.connect(port);
                 } else {
                     self.responder.send("Connection failed.\n".to_string())?;
                 }
             }
             AutoConnect => {
+                self.tasks.clear();
                 self.responder.send("Connecting...\n".to_string())?;
                 self.printer = auto_connect().await;
                 self.responder.send(if self.printer.is_connected() {
@@ -623,7 +627,10 @@ impl Commander {
                     "No printer found.\n".to_owned()
                 })?;
             }
-            Disconnect => self.printer.disconnect(),
+            Disconnect => {
+                self.tasks.clear();
+                self.printer.disconnect()
+            }
             Help(subcommand) => {
                 self.responder.send(help(subcommand).to_string())?;
             }
