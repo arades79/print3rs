@@ -503,8 +503,39 @@ pub fn send_gcodes(
     Ok(())
 }
 
+#[derive(Debug)]
+pub enum Response {
+    Output(String),
+    Error(ErrorKindOf),
+    AutoConnect(SerialPrinter),
+}
+
+impl From<String> for Response {
+    fn from(value: String) -> Self {
+        Response::Output(value)
+    }
+}
+
+impl<'a> From<&'a str> for Response {
+    fn from(value: &'a str) -> Self {
+        Response::Output(value.to_string())
+    }
+}
+
+impl From<ErrorKindOf> for Response {
+    fn from(value: ErrorKindOf) -> Self {
+        Response::Error(value)
+    }
+}
+
+impl From<SerialPrinter> for Response {
+    fn from(value: SerialPrinter) -> Self {
+        Response::AutoConnect(value)
+    }
+}
+
 type CommandReceiver = tokio::sync::mpsc::Receiver<Command<String>>;
-type ResponseSender = tokio::sync::broadcast::Sender<String>;
+type ResponseSender = tokio::sync::broadcast::Sender<Response>;
 
 pub struct Commander {
     pub printer: SerialPrinter,
@@ -529,15 +560,15 @@ impl Commander {
         tokio::spawn(async move {
             loop {
                 while let Some(command) = commands.recv().await {
-                    if let Err(e) = self.dispatch(&command).await {
+                    if let Err(e) = self.dispatch(&command) {
                         let e = e.0;
-                        let _ = self.responder.send(format!("Error: {e}"));
+                        let _ = self.responder.send(format!("Error: {e}").into());
                     }
                 }
             }
         })
     }
-    async fn dispatch(&mut self, command: impl Into<Command<&'_ str>>) -> Result<(), ErrorKindOf> {
+    fn dispatch<'a>(&'a mut self, command: impl Into<Command<&'a str>>) -> Result<(), ErrorKindOf> {
         let command = command.into();
         use Command::*;
         const DISCONNECTED_ERROR: &str = "No printer is connected!";
@@ -551,21 +582,21 @@ impl Commander {
             Gcodes(codes) => {
                 let codes = self.macros.expand(codes);
                 if let Err(_e) = send_gcodes(&self.printer, codes) {
-                    self.responder.send(DISCONNECTED_ERROR.to_string())?;
+                    self.responder.send(DISCONNECTED_ERROR.into())?;
                 }
             }
             Print(filename) => {
                 if let Ok(print) = start_print_file(filename, &self.printer) {
                     self.tasks.insert(filename.to_string(), print);
                 } else {
-                    self.responder.send(DISCONNECTED_ERROR.to_string())?;
+                    self.responder.send(DISCONNECTED_ERROR.into())?;
                 }
             }
             Log(name, pattern) => {
                 if let Ok(log) = start_logging(name, pattern, &self.printer) {
                     self.tasks.insert(name.to_string(), log);
                 } else {
-                    self.responder.send(DISCONNECTED_ERROR.to_string())?;
+                    self.responder.send(DISCONNECTED_ERROR.into())?;
                 }
             }
             Repeat(name, gcodes) => {
@@ -574,7 +605,7 @@ impl Commander {
                     let repeat = start_repeat(gcodes, socket.clone());
                     self.tasks.insert(name.to_string(), repeat);
                 } else {
-                    self.responder.send(DISCONNECTED_ERROR.to_string())?;
+                    self.responder.send(DISCONNECTED_ERROR.into())?;
                 }
             }
             Tasks => {
@@ -586,7 +617,8 @@ impl Commander {
                     },
                 ) in self.tasks.iter()
                 {
-                    self.responder.send(format!("{name}\t{description}\n"))?;
+                    self.responder
+                        .send(format!("{name}\t{description}\n").into())?;
                 }
             }
             Stop(name) => {
@@ -595,13 +627,13 @@ impl Commander {
             Macro(name, commands) => {
                 if self.macros.add(name, commands).is_err() {
                     self.responder
-                        .send("Infinite macro detected! Macro not added.\n".to_string())?;
+                        .send("Infinite macro detected! Macro not added.\n".into())?;
                 }
             }
             Macros => {
                 for (name, steps) in self.macros.iter() {
                     let steps = steps.join(";");
-                    self.responder.send(format!("{name}:    {steps}"))?;
+                    self.responder.send(format!("{name}:    {steps}").into())?;
                 }
             }
             DeleteMacro(name) => {
@@ -614,31 +646,29 @@ impl Commander {
                     self.tasks.clear();
                     self.printer.connect(port);
                 } else {
-                    self.responder.send("Connection failed.\n".to_string())?;
+                    self.responder.send("Connection failed.\n".into())?;
                 }
             }
             AutoConnect => {
                 self.tasks.clear();
-                self.responder.send("Connecting...\n".to_string())?;
-                self.printer = auto_connect().await;
-                self.responder.send(if self.printer.is_connected() {
-                    "Found printer!\n".to_owned()
-                } else {
-                    "No printer found.\n".to_owned()
-                })?;
+                self.responder.send("Connecting...\n".into())?;
+                let autoconnect_responder = self.responder.clone();
+                tokio::spawn(async move {
+                    let _ = autoconnect_responder.send(auto_connect().await.into());
+                });
             }
             Disconnect => {
                 self.tasks.clear();
                 self.printer.disconnect()
             }
             Help(subcommand) => {
-                self.responder.send(help(subcommand).to_string())?;
+                self.responder.send(help(subcommand).into())?;
             }
             Version => {
-                self.responder.send(version().to_owned())?;
+                self.responder.send(version().into())?;
             }
             _ => {
-                self.responder.send("Unsupported command!\n".to_string())?;
+                self.responder.send("Unsupported command!\n".into())?;
             }
         };
         Ok(())
