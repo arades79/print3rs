@@ -1,5 +1,5 @@
 use {
-    print3rs_commands::commands::Macros, print3rs_core::SerialPrinter, std::collections::HashMap,
+    print3rs_commands::commands::{self, Macros}, print3rs_core::SerialPrinter, std::collections::HashMap,
 };
 
 use iced::widget::combo_box::State as ComboState;
@@ -27,7 +27,7 @@ where
 struct App {
     ports: ComboState<String>,
     selected_port: Option<String>,
-    printer: print3rs_core::SerialPrinter,
+    commander: commands::Commander,
     bauds: ComboState<u32>,
     selected_baud: Option<u32>,
     command: String,
@@ -70,9 +70,8 @@ enum Message {
     ChangePort(String),
     ChangeBaud(u32),
     ToggleConnect,
-    //Connected(SerialPrinter),
     CommandInput(String),
-    ProcessCommand,
+    BackgroundResponse(commands::Response)
 }
 
 impl iced::Application for App {
@@ -97,7 +96,7 @@ impl iced::Application for App {
                 selected_port: None,
                 bauds: ComboState::new(vec![2400, 9600, 19200, 38400, 57600, 115200, 250000]),
                 selected_baud: Some(115200),
-                printer: Default::default(),
+                commander: Default::default(),
                 command: Default::default(),
                 output: Default::default(),
                 tasks: Default::default(),
@@ -118,18 +117,18 @@ impl iced::Application for App {
     fn update(&mut self, message: Self::Message) -> iced::Command<Self::Message> {
         match message {
             Message::Jog(JogMove { x, y, z }) => {
-                let _ = self.printer.send_unsequenced(format!("G7X{x}Y{y}Z{z}"));
+                let _ = self.commander.printer.send_unsequenced(format!("G7X{x}Y{y}Z{z}"));
                 Command::none()
             }
             Message::ToggleConnect => {
-                if self.printer.is_connected() {
-                    self.printer.disconnect();
+                if self.commander.printer.is_connected() {
+                    self.commander.printer.disconnect();
                 } else if let Some(ref port) = self.selected_port {
                     if port == "auto" {
                         // this is where it would auto connect
                     }
                     if let Some(baud) = self.selected_baud {
-                        self.printer
+                        self.commander.printer
                             .connect(tokio_serial::new(port, baud).open_native_async().unwrap());
                     }
                 }
