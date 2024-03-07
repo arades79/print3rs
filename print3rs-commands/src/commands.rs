@@ -405,7 +405,7 @@ pub fn start_print_file<Transport>(
     let filename = filename.to_owned();
     let socket = printer.socket()?.clone();
     let task: JoinHandle<Result<(), TaskError>> = tokio::spawn(async move {
-        if let Ok(file) = std::fs::read_to_string(filename) {
+        if let Ok(file) = tokio::fs::read_to_string(filename).await {
             for line in file.lines() {
                 socket.send(line).await?.await?;
             }
@@ -580,6 +580,28 @@ impl Commander {
         self.responder.subscribe()
     }
 
+    fn forward_broadcast(
+        mut in_channel: tokio::sync::broadcast::Receiver<bytes::Bytes>,
+        out_channel: tokio::sync::broadcast::Sender<Response>,
+    ) {
+        tokio::spawn(async move {
+            while let Ok(in_message) = in_channel.recv().await {
+                out_channel
+                    .send(Response::Output(
+                        String::from_utf8_lossy(&in_message).to_string(),
+                    ))
+                    .unwrap();
+            }
+        });
+    }
+
+    fn add_printer_output_to_responses(&self) {
+        if let Ok(print_messages) = self.printer.subscribe_lines() {
+            let responder = self.responder.clone();
+            Self::forward_broadcast(print_messages, responder);
+        }
+    }
+
     pub fn background(mut self, mut commands: CommandReceiver) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
             loop {
@@ -598,7 +620,7 @@ impl Commander {
     ) -> Result<(), ErrorKindOf> {
         let command = command.into();
         use Command::*;
-        const DISCONNECTED_ERROR: &str = "No printer is connected!";
+        const DISCONNECTED_ERROR: &str = "No printer is connected!\n";
         match command {
             Clear => {
                 self.responder.send(Response::Clear)?;
@@ -660,7 +682,8 @@ impl Commander {
             Macros => {
                 for (name, steps) in self.macros.iter() {
                     let steps = steps.join(";");
-                    self.responder.send(format!("{name}:    {steps}").into())?;
+                    self.responder
+                        .send(format!("{name}:    {steps}\n").into())?;
                 }
             }
             DeleteMacro(name) => {
@@ -672,6 +695,7 @@ impl Commander {
                 {
                     self.tasks.clear();
                     self.printer.connect(port);
+                    self.add_printer_output_to_responses();
                 } else {
                     self.responder.send("Connection failed.\n".into())?;
                 }
@@ -681,7 +705,13 @@ impl Commander {
                 self.responder.send("Connecting...\n".into())?;
                 let autoconnect_responder = self.responder.clone();
                 tokio::spawn(async move {
-                    let _ = autoconnect_responder.send(auto_connect().await.into());
+                    let printer = auto_connect().await;
+                    if let Ok(printer_responses) = printer.subscribe_lines() {
+                        let forward_responder = autoconnect_responder.clone();
+                        Self::forward_broadcast(printer_responses, forward_responder);
+                    }
+                    let _ = autoconnect_responder.send(printer.into());
+
                 });
             }
             Disconnect => {

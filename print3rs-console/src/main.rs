@@ -69,9 +69,6 @@ async fn main() -> Result<(), AppError> {
 
     loop {
         tokio::select! {
-            Ok(response) = commander.printer.read_next_line() => {
-                writer.write_all(&response).await?;
-            },
             Ok(response) = responses.recv() => {
                 match response {
                     commands::Response::Output(s) => {
