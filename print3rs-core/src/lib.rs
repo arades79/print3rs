@@ -221,27 +221,18 @@ async fn printer_com_task(
     loop {
         tokio::select! {
             Some(line) = gcoderx.recv() => {
-                match transport.write_all(&line).await {
-                    Ok(_) => (),
-                    Err(_) => break,
-                };
-                match transport.flush().await {
-                    Ok(_) => (),
-                    Err(_) => break,
-                };
+                if transport.write_all(&line).await.is_err() {return;}
+                if transport.flush().await.is_err() {return;}
                 tracing::debug!("Sent `{}` to printer", String::from_utf8_lossy(&line).trim());
             },
             Ok(1..) = transport.read_buf(&mut buf) => {
                 while let Some(n) = buf.iter().position(|b| *b == b'\n') {
                     let line = buf.split_to(n + 1).freeze();
                     tracing::debug!("Received `{}` from printer", String::from_utf8_lossy(&line).trim());
-                    match responsetx.send(line) {
-                        Ok(_) => (),
-                        Err(_) => break,
-                    };
+                    if responsetx.send(line).is_err() {return;}
                 }
             },
-            else => break,
+            else => return,
         }
     }
 }

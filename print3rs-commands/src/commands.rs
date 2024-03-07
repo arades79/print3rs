@@ -541,6 +541,7 @@ type CommandReceiver = tokio::sync::mpsc::Receiver<Command<String>>;
 type ResponseSender = tokio::sync::broadcast::Sender<Response>;
 type ResponseReceiver = tokio::sync::broadcast::Receiver<Response>;
 
+#[derive(Debug)]
 pub struct Commander {
     pub printer: SerialPrinter,
     pub tasks: Tasks,

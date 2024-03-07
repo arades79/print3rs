@@ -2,11 +2,7 @@
 //!  A shell to talk to 3D printers or other Gcode accepting serial devices, inspired by Pronsole
 //!
 
-use {
-    print3rs_core::{SerialPrinter},
-    std::sync::Arc,
-    std::{fmt::Debug},
-};
+use {print3rs_core::SerialPrinter, std::fmt::Debug, std::sync::Arc};
 
 use futures_util::AsyncWriteExt;
 use rustyline_async::{Readline, ReadlineEvent, SharedWriter};
