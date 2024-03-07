@@ -3,11 +3,9 @@
 //!
 
 use {
-    print3rs_commands::commands::{start_repeat, BackgroundTask},
-    print3rs_core::{AsyncPrinterComm, Printer, SerialPrinter},
+    print3rs_core::{SerialPrinter},
     std::sync::Arc,
-    std::{collections::HashMap, fmt::Debug},
-    tokio_serial::SerialPortBuilderExt,
+    std::{fmt::Debug},
 };
 
 use futures_util::AsyncWriteExt;
