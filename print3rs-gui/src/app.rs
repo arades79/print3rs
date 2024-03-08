@@ -1,20 +1,19 @@
 use {
     iced::futures::prelude::stream::StreamExt,
-    print3rs_commands::commands::{self, Macros, Response},
-    print3rs_core::{Printer, SerialPrinter},
-    std::collections::HashMap,
+    print3rs_commands::commands::{self, Response},
+    print3rs_core::{Printer},
     std::sync::Arc,
 };
 
 use iced::widget::combo_box::State as ComboState;
-use iced::widget::{button, column, combo_box, row, scrollable, text, text_input};
-use iced::{Application, Command, Length};
-use print3rs_commands::commands::BackgroundTask;
+use iced::widget::{column};
+use iced::{Application, Command};
+
 use print3rs_core::AsyncPrinterComm;
-use tokio_serial::{available_ports, SerialPortBuilderExt};
+use tokio_serial::{available_ports};
 use tokio_stream::wrappers::BroadcastStream;
 
-use iced_aw::{grid, grid_row, menu, menu::Item, menu_bar, Element};
+
 
 use winnow::prelude::*;
 
