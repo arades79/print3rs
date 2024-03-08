@@ -15,6 +15,8 @@ use tokio_stream::wrappers::BroadcastStream;
 
 use winnow::prelude::*;
 
+use crate::messages::{JogMove, Message};
+
 pub(crate) type AppElement<'a> = iced_aw::Element<'a, <App as iced::Application>::Message>;
 
 #[derive(Debug, Clone)]
@@ -38,45 +40,6 @@ pub(crate) struct App {
     pub(crate) selected_baud: Option<u32>,
     pub(crate) command: String,
     pub(crate) output: String,
-}
-
-#[derive(Debug, Clone, Default)]
-pub(crate) struct JogMove {
-    x: f32,
-    y: f32,
-    z: f32,
-}
-
-impl JogMove {
-    pub(crate) fn x(x: f32) -> Self {
-        Self {
-            x,
-            ..Default::default()
-        }
-    }
-    pub(crate) fn y(y: f32) -> Self {
-        Self {
-            y,
-            ..Default::default()
-        }
-    }
-    pub(crate) fn z(z: f32) -> Self {
-        Self {
-            z,
-            ..Default::default()
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub(crate) enum Message {
-    Jog(JogMove),
-    ChangePort(String),
-    ChangeBaud(u32),
-    ToggleConnect,
-    CommandInput(String),
-    ProcessCommand,
-    BackgroundResponse(commands::Response),
 }
 
 impl iced::Application for App {

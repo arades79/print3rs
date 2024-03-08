@@ -1,7 +1,8 @@
 use iced::widget::{button, combo_box, row};
 use iced::Length;
 
-use crate::app::{App, AppElement, Message};
+use crate::messages::Message;
+use crate::app::{App, AppElement};
 
 pub(crate) fn connector(app: &App) -> AppElement<'_> {
     let port_list = combo_box(

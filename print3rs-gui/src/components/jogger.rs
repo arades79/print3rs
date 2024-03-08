@@ -1,21 +1,7 @@
-
-
-
 use iced::widget::{button, column, row};
 
-
-
-
-
-
-
-
-
-
-
-
-
-use crate::app::{App, AppElement, Message, JogMove};
+use crate::app::{App, AppElement};
+use crate::messages::{JogMove, Message};
 
 pub(crate) fn jogger(app: &App) -> AppElement<'_> {
     let maybe_jog = |jogmove| {

@@ -2,6 +2,7 @@
 use iced::Application;
 
 mod components;
+mod messages;
 mod app;
 
 

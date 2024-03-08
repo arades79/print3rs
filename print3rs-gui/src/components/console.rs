@@ -3,7 +3,8 @@ use iced::{
     Length,
 };
 
-use crate::app::{App, AppElement, Message};
+use crate::app::{App, AppElement};
+use crate::messages::Message;
 
 pub(crate) fn console(app: &App) -> AppElement<'_> {
     column![
