@@ -543,10 +543,10 @@ type ResponseReceiver = tokio::sync::broadcast::Receiver<Response>;
 
 #[derive(Debug)]
 pub struct Commander {
-    pub printer: SerialPrinter,
+    printer: SerialPrinter,
     pub tasks: Tasks,
     pub macros: Macros,
-    pub responder: ResponseSender,
+    responder: ResponseSender,
 }
 #[derive(Debug, Clone)]
 pub struct ErrorKindOf(pub String);
@@ -575,6 +575,15 @@ impl Commander {
             tasks: Default::default(),
             macros: Default::default(),
         }
+    }
+
+    pub fn printer(&self) -> &SerialPrinter {
+        &self.printer
+    }
+
+    pub fn set_printer(&mut self, printer: SerialPrinter) {
+        self.tasks.clear();
+        self.printer = printer;
     }
 
     pub fn subscribe_responses(&self) -> ResponseReceiver {
@@ -707,12 +716,13 @@ impl Commander {
                 let autoconnect_responder = self.responder.clone();
                 tokio::spawn(async move {
                     let printer = auto_connect().await;
+                    let message = if printer.is_connected() {"Found Printer!\n"} else {"No printer found.\n"};
                     if let Ok(printer_responses) = printer.subscribe_lines() {
                         let forward_responder = autoconnect_responder.clone();
                         Self::forward_broadcast(printer_responses, forward_responder);
                     }
                     let _ = autoconnect_responder.send(printer.into());
-
+                    let _ = autoconnect_responder.send(message.into());
                 });
             }
             Disconnect => {

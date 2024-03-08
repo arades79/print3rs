@@ -1,5 +1,8 @@
 use {
-    print3rs_commands::commands::{self, Macros}, print3rs_core::SerialPrinter, std::collections::HashMap,
+    iced::futures::prelude::stream::StreamExt,
+    print3rs_commands::commands::{self, Macros, Response},
+    print3rs_core::{Printer, SerialPrinter},
+    std::collections::HashMap,
 };
 
 use iced::widget::combo_box::State as ComboState;
@@ -8,8 +11,11 @@ use iced::{Application, Command, Length};
 use print3rs_commands::commands::BackgroundTask;
 use print3rs_core::AsyncPrinterComm;
 use tokio_serial::{available_ports, SerialPortBuilderExt};
+use tokio_stream::wrappers::BroadcastStream;
 
 use winnow::prelude::*;
+
+use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 struct ErrorKindOf(String);
@@ -32,8 +38,6 @@ struct App {
     selected_baud: Option<u32>,
     command: String,
     output: String,
-    tasks: HashMap<String, BackgroundTask>,
-    macros: Macros,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -71,7 +75,8 @@ enum Message {
     ChangeBaud(u32),
     ToggleConnect,
     CommandInput(String),
-    BackgroundResponse(commands::Response)
+    ProcessCommand,
+    BackgroundResponse(commands::Response),
 }
 
 impl iced::Application for App {
@@ -99,37 +104,53 @@ impl iced::Application for App {
                 commander: Default::default(),
                 command: Default::default(),
                 output: Default::default(),
-                tasks: Default::default(),
-                macros: Default::default(),
             },
             iced::Command::none(),
         )
     }
 
     fn title(&self) -> String {
-        "Print3rs".to_string()
+        let status = if self.commander.printer().is_connected() {
+            "Connected"
+        } else {
+            "Disconnected"
+        };
+        format!("Print3rs - {status}")
     }
 
     fn subscription(&self) -> iced::Subscription<Self::Message> {
-        
+        struct PrinterResponseSubscription;
+        let responses = self.commander.subscribe_responses();
+        let response_stream = BroadcastStream::new(responses)
+            .map(|response| Message::BackgroundResponse(response.unwrap()));
+        iced::subscription::run_with_id(
+            std::any::TypeId::of::<PrinterResponseSubscription>(),
+            response_stream,
+        )
     }
 
     fn update(&mut self, message: Self::Message) -> iced::Command<Self::Message> {
         match message {
             Message::Jog(JogMove { x, y, z }) => {
-                let _ = self.commander.printer.send_unsequenced(format!("G7X{x}Y{y}Z{z}"));
+                let _ = self
+                    .commander
+                    .printer()
+                    .send_unsequenced(format!("G7X{x}Y{y}Z{z}"));
                 Command::none()
             }
             Message::ToggleConnect => {
-                if self.commander.printer.is_connected() {
-                    self.commander.printer.disconnect();
+                if self.commander.printer().is_connected() {
+                    self.commander.set_printer(Printer::Disconnected);
                 } else if let Some(ref port) = self.selected_port {
                     if port == "auto" {
-                        // this is where it would auto connect
-                    }
-                    if let Some(baud) = self.selected_baud {
-                        self.commander.printer
-                            .connect(tokio_serial::new(port, baud).open_native_async().unwrap());
+                        let _ = self
+                            .commander
+                            .dispatch(print3rs_commands::commands::Command::AutoConnect);
+                    } else {
+                        let _ = self.commander.dispatch(commands::Command::Connect(
+                            port.as_str(),
+                            self.selected_baud,
+                        ));
                     }
                 }
 
@@ -142,118 +163,37 @@ impl iced::Application for App {
             Message::ProcessCommand => {
                 if let Ok(command) = print3rs_commands::commands::parse_command.parse(&self.command)
                 {
-                    use print3rs_commands::commands;
-                    use print3rs_commands::commands::Command::*;
-                    const DISCONNECTED_ERROR: &str = "No printer connected!\n";
-                    match command {
-                        Clear => {
-                            self.output.clear();
-                        }
-                        Quit => {
-                            todo!()
-                        }
-                        Gcodes(codes) => {
-                            let codes = self.macros.expand(codes);
-                            if let Err(_e) = commands::send_gcodes(&self.printer, codes) {
-                                self.output.push_str(DISCONNECTED_ERROR);
-                            }
-                        }
-                        Print(filename) => {
-                            if let Ok(print) = commands::start_print_file(filename, &self.printer) {
-                                self.tasks.insert(filename.to_string(), print);
-                            } else {
-                                self.output.push_str(DISCONNECTED_ERROR);
-                            }
-                        }
-                        Log(name, pattern) => {
-                            if let Ok(log) = commands::start_logging(name, pattern, &self.printer) {
-                                self.tasks.insert(name.to_string(), log);
-                            } else {
-                                self.output.push_str(DISCONNECTED_ERROR);
-                            }
-                        }
-                        Repeat(name, gcodes) => {
-                            if let Ok(socket) = self.printer.socket() {
-                                let gcodes = self.macros.expand(gcodes);
-                                let repeat = commands::start_repeat(gcodes, socket.clone());
-                                self.tasks.insert(name.to_string(), repeat);
-                            } else {
-                                self.output.push_str(DISCONNECTED_ERROR);
-                            }
-                        }
-                        Tasks => {
-                            for (
-                                name,
-                                BackgroundTask {
-                                    description,
-                                    abort_handle: _,
-                                },
-                            ) in self.tasks.iter()
-                            {
-                                self.output
-                                    .push_str(format!("{name}\t{description}\n").as_str());
-                            }
-                        }
-                        Stop(name) => {
-                            self.tasks.remove(name);
-                        }
-                        Macro(name, steps) => {
-                            if self.macros.add(name, steps).is_err() {
-                                self.output.push_str(
-                                    "Infinite recursion detected for macro! Macro was not added.\n",
-                                )
-                            }
-                        }
-                        Macros => {
-                            for (name, steps) in self.macros.iter() {
-                                self.output.push_str(name);
-                                self.output.push_str("        ");
-                                self.output.push_str(&steps.join(";"));
-                                self.output.push('\n');
-                            }
-                        }
-                        DeleteMacro(name) => {
-                            self.macros.remove(name);
-                        }
-                        Connect(path, baud) => {
-                            if let Ok(port) =
-                                tokio_serial::new(path, baud.unwrap_or(115200)).open_native_async()
-                            {
-                                self.printer.connect(port);
-                            } else {
-                                self.output.push_str("Connection failed.\n");
-                            }
-                        }
-                        AutoConnect => {
-                            self.output.push_str("Connecting...\n");
-                            todo!();
-                            // self.printer = commands::auto_connect().await;
-                            // self.output.push_str(if self.printer.is_connected() {
-                            //     "Found printer!\n"
-                            // } else {
-                            //     "No printer found.\n"
-                            // });
-                        }
-                        Disconnect => self.printer.disconnect(),
-                        Help(subcommand) => self.output.push_str(commands::help(subcommand)),
-                        Version => self.output.push_str(commands::version()),
-                        Unrecognized => self.output.push_str("Unrecognized command!\n"),
-                        _ => (),
-                    };
-                    //self.output.push_str(&self.command);
+                    let _ = self.commander.dispatch(command);
                     self.command.clear();
                 }
                 Command::none()
             }
-            // Message::Connected(printer) => {
-            //     self.printer = printer;
-            // }
+
             Message::ChangePort(port) => {
                 self.selected_port = Some(port);
                 Command::none()
             }
             Message::ChangeBaud(baud) => {
                 self.selected_baud = Some(baud);
+                Command::none()
+            }
+            Message::BackgroundResponse(response) => {
+                match response {
+                    Response::Output(s) => {
+                        self.output.push_str(&s);
+                    }
+                    Response::Error(_) => todo!(),
+                    Response::AutoConnect(a_printer) => {
+                        let printer = Arc::into_inner(a_printer).unwrap_or_default();
+                        self.commander.set_printer(printer);
+                    }
+                    Response::Clear => {
+                        self.output.clear();
+                    }
+                    Response::Quit => {
+                        todo!()
+                    }
+                };
                 Command::none()
             }
         }
@@ -276,12 +216,17 @@ impl iced::Application for App {
         )
         .width(Length::FillPortion(1))
         .on_input(|s| Message::ChangeBaud(s.parse().unwrap_or_default()));
-        let maybe_jog = |jogmove| self.printer.is_connected().then_some(Message::Jog(jogmove));
+        let maybe_jog = |jogmove| {
+            self.commander
+                .printer()
+                .is_connected()
+                .then_some(Message::Jog(jogmove))
+        };
         column![
             row![
                 port_list,
                 baud_list,
-                button(if self.printer.is_connected() {
+                button(if self.commander.printer().is_connected() {
                     "disconnect"
                 } else {
                     "connect"
@@ -313,7 +258,8 @@ impl iced::Application for App {
                     button("Z-0.1").on_press_maybe(maybe_jog(JogMove::z(0.1))),
                     button("Z-1.0").on_press_maybe(maybe_jog(JogMove::z(1.0))),
                     button("Z-10.0").on_press_maybe(maybe_jog(JogMove::z(10.0))),
-                ]
+                ],
+
             ],
             scrollable(text(&self.output))
                 .width(Length::Fill)

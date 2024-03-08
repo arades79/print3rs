@@ -51,7 +51,7 @@ fn setup_logging(writer: SharedWriter) {
 async fn main() -> Result<(), AppError> {
     let mut commander = commands::Commander::new();
 
-    let (mut readline, mut writer) = Readline::new(prompt_string(&commander.printer))?;
+    let (mut readline, mut writer) = Readline::new(prompt_string(commander.printer()))?;
 
     writer.write_all(commands::version().as_bytes()).await?;
     writer
@@ -72,14 +72,7 @@ async fn main() -> Result<(), AppError> {
                         writer.write_all(format!("Error: {}", e.0).as_bytes()).await?;
                     },
                     commands::Response::AutoConnect(a_printer) => {
-                        commander.printer = Arc::into_inner(a_printer).unwrap_or_default();
-                        writer.write_all(
-                            if commander.printer.is_connected() {
-                                b"Found printer!\n"
-                            } else {
-                                b"No printer found.\n"
-                            }
-                        ).await?;
+                        commander.set_printer(Arc::into_inner(a_printer).unwrap_or_default());
                     },
                     commands::Response::Clear => {
                         readline.clear()?;
@@ -106,6 +99,6 @@ async fn main() -> Result<(), AppError> {
                 readline.add_history_entry(line);
             },
         }
-        readline.update_prompt(&prompt_string(&commander.printer))?;
+        readline.update_prompt(&prompt_string(commander.printer()))?;
     }
 }
