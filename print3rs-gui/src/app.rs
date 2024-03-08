@@ -1,19 +1,17 @@
 use {
     iced::futures::prelude::stream::StreamExt,
     print3rs_commands::commands::{self, Response},
-    print3rs_core::{Printer},
+    print3rs_core::Printer,
     std::sync::Arc,
 };
 
+use iced::widget::column;
 use iced::widget::combo_box::State as ComboState;
-use iced::widget::{column};
-use iced::{Application, Command};
+use iced::Command;
 
 use print3rs_core::AsyncPrinterComm;
-use tokio_serial::{available_ports};
+use tokio_serial::available_ports;
 use tokio_stream::wrappers::BroadcastStream;
-
-
 
 use winnow::prelude::*;
 

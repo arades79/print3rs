@@ -1,19 +1,7 @@
-
-
-
-use iced::widget::{button, column, row, scrollable, text, text_input};
-use iced::{Length};
-
-
-
-
-
-
-
-
-
-
-
+use iced::{
+    widget::{button, column, row, scrollable, text, text_input},
+    Length,
+};
 
 use crate::app::{App, AppElement, Message};
 

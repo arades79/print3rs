@@ -15,7 +15,7 @@ pub enum Segment<S> {
 }
 
 impl<S> Segment<S> {
-    pub fn to_borrowed<'a, B: ?Sized>(&'a self) -> Segment<&'a B>
+    pub fn to_borrowed<B: ?Sized>(&self) -> Segment<&B>
     where
         S: Borrow<B>,
     {
