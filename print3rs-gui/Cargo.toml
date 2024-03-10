@@ -6,12 +6,18 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-print3rs-core ={ path = "../print3rs-core"}
-gcode-serializer ={ path = "../gcode-serializer"}
-print3rs-commands = {path = "../print3rs-commands"}
+print3rs-core = { path = "../print3rs-core" }
+gcode-serializer = { path = "../gcode-serializer" }
+print3rs-commands = { path = "../print3rs-commands" }
 iced = { version = "0.12.1", features = ["tokio"] }
-tokio-serial = {version = "5.4.4", features = ["libudev"]}
+tokio-serial = { version = "5.4.4", features = ["libudev"] }
 tokio = { version = "1.36.0", features = ["rt", "sync", "fs"] }
 winnow = "0.6.3"
 tokio-stream = { version = "0.1.14", features = ["sync"] }
 iced_aw = "0.8.0"
+directories-next = "2.0.0"
+rfd = { version = "0.14.0", default-features = false, features = [
+    "tokio",
+    "xdg-portal",
+] }
+iced_runtime = "0.12.1"

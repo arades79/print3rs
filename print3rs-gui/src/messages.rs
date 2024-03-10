@@ -1,4 +1,9 @@
-use print3rs_commands::commands::Response;
+use {
+    print3rs_commands::commands::{Command, Response},
+    print3rs_core::SerialPrinter,
+    std::path::PathBuf,
+    std::sync::Arc,
+};
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct JogMove {
@@ -35,6 +40,26 @@ pub(crate) enum Message {
     ChangeBaud(u32),
     ToggleConnect,
     CommandInput(String),
-    ProcessCommand,
-    BackgroundResponse(Response),
+    SubmitCommand,
+    ProcessCommand(Command<String>),
+    Quit,
+    ClearConsole,
+    PrintDialog,
+    SaveDialog,
+    SaveConsole(PathBuf),
+    ConsoleAppend(String),
+    AutoConnectComplete(Arc<SerialPrinter>),
+    NoOp,
+}
+
+impl From<Response> for Message {
+    fn from(value: Response) -> Self {
+        match value {
+            Response::Output(s) => Message::ConsoleAppend(s),
+            Response::Error(e) => Message::ConsoleAppend(format!("Error: {}", e.0)),
+            Response::AutoConnect(a) => Message::AutoConnectComplete(a),
+            Response::Clear => Message::ClearConsole,
+            Response::Quit => Message::Quit,
+        }
+    }
 }

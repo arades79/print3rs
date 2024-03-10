@@ -1,5 +1,9 @@
 use {
-    iced::futures::prelude::stream::StreamExt,
+    iced::{
+        futures::prelude::stream::StreamExt,
+        window::{self, Action},
+        Application,
+    },
     print3rs_commands::commands::{self, Response},
     print3rs_core::Printer,
     std::sync::Arc,
@@ -14,6 +18,8 @@ use tokio_serial::available_ports;
 use tokio_stream::wrappers::BroadcastStream;
 
 use winnow::prelude::*;
+
+use rfd::{AsyncFileDialog, FileHandle};
 
 use crate::messages::{JogMove, Message};
 
@@ -84,8 +90,8 @@ impl iced::Application for App {
     fn subscription(&self) -> iced::Subscription<Self::Message> {
         struct PrinterResponseSubscription;
         let responses = self.commander.subscribe_responses();
-        let response_stream = BroadcastStream::new(responses)
-            .map(|response| Message::BackgroundResponse(response.unwrap()));
+        let response_stream =
+            BroadcastStream::new(responses).map(|response| Message::from(response.unwrap()));
         iced::subscription::run_with_id(
             std::any::TypeId::of::<PrinterResponseSubscription>(),
             response_stream,
@@ -123,7 +129,7 @@ impl iced::Application for App {
                 self.command = s;
                 Command::none()
             }
-            Message::ProcessCommand => {
+            Message::SubmitCommand => {
                 if let Ok(command) = print3rs_commands::commands::parse_command.parse(&self.command)
                 {
                     let _ = self.commander.dispatch(command);
@@ -131,7 +137,10 @@ impl iced::Application for App {
                 }
                 Command::none()
             }
-
+            Message::ProcessCommand(command) => {
+                self.commander.dispatch(&command);
+                Command::none()
+            }
             Message::ChangePort(port) => {
                 self.selected_port = Some(port);
                 Command::none()
@@ -140,25 +149,50 @@ impl iced::Application for App {
                 self.selected_baud = Some(baud);
                 Command::none()
             }
-            Message::BackgroundResponse(response) => {
-                match response {
-                    Response::Output(s) => {
-                        self.output.push_str(&s);
-                    }
-                    Response::Error(_) => todo!(),
-                    Response::AutoConnect(a_printer) => {
-                        let printer = Arc::into_inner(a_printer).unwrap_or_default();
-                        self.commander.set_printer(printer);
-                    }
-                    Response::Clear => {
-                        self.output.clear();
-                    }
-                    Response::Quit => {
-                        todo!()
-                    }
-                };
+            Message::ConsoleAppend(s) => {
+                self.output.push_str(&s);
                 Command::none()
             }
+            Message::AutoConnectComplete(a_printer) => {
+                let printer = Arc::into_inner(a_printer).unwrap_or_default();
+                self.commander.set_printer(printer);
+                Command::none()
+            }
+            Message::ClearConsole => {
+                self.output.clear();
+                Command::none()
+            }
+            Message::Quit => Command::single(iced_runtime::command::Action::Window(Action::Close(
+                window::Id::MAIN,
+            ))),
+            Message::PrintDialog => Command::perform(
+                AsyncFileDialog::new()
+                    .set_directory(directories_next::BaseDirs::new().unwrap().home_dir())
+                    .pick_file(),
+                |f| match f {
+                    Some(file) => {
+                        Message::ProcessCommand(print3rs_commands::commands::Command::Print(
+                            file.path().to_string_lossy().into_owned(),
+                        ))
+                    }
+                    None => Message::NoOp,
+                },
+            ),
+            Message::SaveDialog => Command::perform(
+                AsyncFileDialog::new()
+                    .set_directory(directories_next::BaseDirs::new().unwrap().home_dir())
+                    .save_file(),
+                |f| match f {
+                    Some(file) => Message::SaveConsole(file.into()),
+                    None => Message::NoOp,
+                },
+            ),
+            Message::SaveConsole(file) => {
+                Command::perform(tokio::fs::write(file, self.output.clone()), |_| {
+                    Message::NoOp
+                })
+            }
+            Message::NoOp => Command::none(),
         }
     }
 

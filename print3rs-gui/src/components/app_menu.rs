@@ -1,4 +1,4 @@
-use iced::widget::text;
+use {iced::{widget::{button, text}, Length}};
 
 use iced_aw::{menu, menu::Item, menu_bar};
 
@@ -14,14 +14,17 @@ macro_rules! menu_template {
 pub(crate) fn app_menu(
     _app: &App,
 ) -> menu::MenuBar<'_, Message, <App as iced::Application>::Theme, iced::Renderer> {
+    let menu_button = |label, message| {
+        button(label).on_press(message).width(Length::Fill)
+    };
     #[rustfmt::skip]
     let mb = 
     menu_bar!(
         (text("File"), menu_template!(
-            (text("Print"))
-            (text("Clear"))
-            (text("Save"))
-            (text("Quit"))
+            (menu_button("Print", Message::PrintDialog))
+            (menu_button("Clear",Message::ClearConsole))
+            (menu_button("Save",Message::SaveDialog))
+            (menu_button("Quit",Message::Quit))
         ))
         (text("Settings"), menu_template!(
             (text("Log Level"))
