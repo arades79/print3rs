@@ -14,6 +14,7 @@ pub(crate) fn console(app: &App) -> AppElement<'_> {
         row![
             text_input("type `help` for list of commands", &app.command)
                 .on_input(Message::CommandInput)
+                .on_paste(Message::CommandInput)
                 .on_submit(Message::SubmitCommand),
             button("send").on_press(Message::SubmitCommand),
         ]

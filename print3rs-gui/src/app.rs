@@ -1,16 +1,18 @@
 use {
     iced::{
-        futures::prelude::stream::StreamExt,
+        alignment,
+        futures::prelude::{future::err, stream::StreamExt},
+        widget::button,
         window::{self, Action},
-        Application,
+        Application, Length,
     },
     print3rs_commands::commands::{self, Response},
     print3rs_core::Printer,
     std::sync::Arc,
 };
 
-use iced::widget::column;
 use iced::widget::combo_box::State as ComboState;
+use iced::widget::{column, text};
 use iced::Command;
 
 use print3rs_core::AsyncPrinterComm;
@@ -46,6 +48,7 @@ pub(crate) struct App {
     pub(crate) selected_baud: Option<u32>,
     pub(crate) command: String,
     pub(crate) output: String,
+    pub(crate) error_messages: Vec<String>,
 }
 
 impl iced::Application for App {
@@ -73,6 +76,7 @@ impl iced::Application for App {
                 commander: Default::default(),
                 command: Default::default(),
                 output: Default::default(),
+                error_messages: Default::default(),
             },
             iced::Command::none(),
         )
@@ -101,10 +105,13 @@ impl iced::Application for App {
     fn update(&mut self, message: Self::Message) -> iced::Command<Self::Message> {
         match message {
             Message::Jog(JogMove { x, y, z }) => {
-                let _ = self
+                if let Err(msg) = self
                     .commander
                     .printer()
-                    .send_unsequenced(format!("G7X{x}Y{y}Z{z}"));
+                    .send_unsequenced(format!("G7X{x}Y{y}Z{z}"))
+                {
+                    self.error_messages.push(msg.to_string());
+                }
                 Command::none()
             }
             Message::ToggleConnect => {
@@ -112,14 +119,17 @@ impl iced::Application for App {
                     self.commander.set_printer(Printer::Disconnected);
                 } else if let Some(ref port) = self.selected_port {
                     if port == "auto" {
-                        let _ = self
+                        if let Err(msg) = self
                             .commander
-                            .dispatch(print3rs_commands::commands::Command::AutoConnect);
-                    } else {
-                        let _ = self.commander.dispatch(commands::Command::Connect(
-                            port.as_str(),
-                            self.selected_baud,
-                        ));
+                            .dispatch(print3rs_commands::commands::Command::AutoConnect)
+                        {
+                            self.error_messages.push(msg.0);
+                        }
+                    } else if let Err(msg) = self.commander.dispatch(commands::Command::Connect(
+                        port.as_str(),
+                        self.selected_baud,
+                    )) {
+                        self.error_messages.push(msg.0);
                     }
                 }
 
@@ -132,13 +142,20 @@ impl iced::Application for App {
             Message::SubmitCommand => {
                 if let Ok(command) = print3rs_commands::commands::parse_command.parse(&self.command)
                 {
-                    let _ = self.commander.dispatch(command);
+                    if let Err(msg) = self.commander.dispatch(command) {
+                        self.error_messages.push(msg.0);
+                    }
                     self.command.clear();
+                } else {
+                    self.error_messages
+                        .push("Could not parse command".to_string());
                 }
                 Command::none()
             }
             Message::ProcessCommand(command) => {
-                self.commander.dispatch(&command);
+                if let Err(msg) = self.commander.dispatch(&command) {
+                    self.error_messages.push(msg.0)
+                }
                 Command::none()
             }
             Message::ChangePort(port) => {
@@ -192,18 +209,30 @@ impl iced::Application for App {
                     Message::NoOp
                 })
             }
+            Message::PushError(msg) => {
+                for i in 0..10 {
+                    self.error_messages.push(format!("{msg} {i}"));
+                }
+
+                Command::none()
+            }
+            Message::DismissError => {
+                self.error_messages.pop();
+                Command::none()
+            }
             Message::NoOp => Command::none(),
         }
     }
 
     fn view(&self) -> iced::Element<'_, Self::Message, Self::Theme, iced::Renderer> {
         use super::components;
-        column![
+        let screen = column![
             components::app_menu(self),
             components::connector(self),
             components::jogger(self),
             components::console(self),
-        ]
-        .into()
+        ];
+
+        components::error_prompt(self, screen).into()
     }
 }

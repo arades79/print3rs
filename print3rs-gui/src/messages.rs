@@ -49,6 +49,8 @@ pub(crate) enum Message {
     SaveConsole(PathBuf),
     ConsoleAppend(String),
     AutoConnectComplete(Arc<SerialPrinter>),
+    PushError(String),
+    DismissError,
     NoOp,
 }
 
@@ -56,7 +58,7 @@ impl From<Response> for Message {
     fn from(value: Response) -> Self {
         match value {
             Response::Output(s) => Message::ConsoleAppend(s),
-            Response::Error(e) => Message::ConsoleAppend(format!("Error: {}", e.0)),
+            Response::Error(e) => Message::PushError(e.0),
             Response::AutoConnect(a) => Message::AutoConnectComplete(a),
             Response::Clear => Message::ClearConsole,
             Response::Quit => Message::Quit,

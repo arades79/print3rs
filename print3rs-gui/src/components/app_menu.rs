@@ -1,4 +1,7 @@
-use {iced::{widget::{button, text}, Length}};
+use iced::{
+    widget::{button, text},
+    Length,
+};
 
 use iced_aw::{menu, menu::Item, menu_bar};
 
@@ -7,24 +10,22 @@ use crate::messages::Message;
 
 macro_rules! menu_template {
      ($($x:tt)+) => {
-         menu!($($x)+).max_width(180.0).offset(6.0).spacing(5.0)
+         menu!($($x)+).max_width(180.0)
      };
  }
 
 pub(crate) fn app_menu(
     _app: &App,
 ) -> menu::MenuBar<'_, Message, <App as iced::Application>::Theme, iced::Renderer> {
-    let menu_button = |label, message| {
-        button(label).on_press(message).width(Length::Fill)
-    };
+    let menu_button = |label| button(label).width(Length::Fill);
     #[rustfmt::skip]
     let mb = 
     menu_bar!(
         (text("File"), menu_template!(
-            (menu_button("Print", Message::PrintDialog))
-            (menu_button("Clear",Message::ClearConsole))
-            (menu_button("Save",Message::SaveDialog))
-            (menu_button("Quit",Message::Quit))
+            (menu_button("Print").on_press(Message::PrintDialog))
+            (menu_button("Clear").on_press(Message::ClearConsole))
+            (menu_button("Save").on_press(Message::SaveDialog))
+            (menu_button("Quit").on_press(Message::Quit))
         ))
         (text("Settings"), menu_template!(
             (text("Log Level"))
@@ -32,6 +33,6 @@ pub(crate) fn app_menu(
             (text("Probably something else"))
         ))
     )
-    .spacing(4.0);
+    .spacing(8.0);
     mb
 }
