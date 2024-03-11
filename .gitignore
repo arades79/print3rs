@@ -2,3 +2,4 @@
 /.xwin-cache
 /.devbox
 /.rustup
+.vscode/settings.json
