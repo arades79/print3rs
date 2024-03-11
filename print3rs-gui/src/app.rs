@@ -8,7 +8,7 @@ use {
     },
     print3rs_commands::commands::{self, Response},
     print3rs_core::Printer,
-    std::sync::Arc,
+    std::{borrow::BorrowMut, collections::VecDeque, sync::Arc},
 };
 
 use iced::widget::combo_box::State as ComboState;
@@ -46,7 +46,9 @@ pub(crate) struct App {
     pub(crate) commander: commands::Commander,
     pub(crate) bauds: ComboState<u32>,
     pub(crate) selected_baud: Option<u32>,
-    pub(crate) command: String,
+    pub(crate) command: Option<String>,
+    pub(crate) command_history: VecDeque<String>,
+    pub(crate) command_state: ComboState<String>,
     pub(crate) output: String,
     pub(crate) error_messages: Vec<String>,
 }
@@ -75,6 +77,8 @@ impl iced::Application for App {
                 selected_baud: Some(115200),
                 commander: Default::default(),
                 command: Default::default(),
+                command_history: Default::default(),
+                command_state: ComboState::new(vec![]),
                 output: Default::default(),
                 error_messages: Default::default(),
             },
@@ -136,16 +140,32 @@ impl iced::Application for App {
                 Command::none()
             }
             Message::CommandInput(s) => {
-                self.command = s;
+                self.command = Some(s);
                 Command::none()
             }
             Message::SubmitCommand => {
-                if let Ok(command) = print3rs_commands::commands::parse_command.parse(&self.command)
+                let Some(ref mut command_string) = self.command else {
+                    return Command::none();
+                };
+                if command_string.is_empty() {
+                    return Command::none();
+                }
+                if let Ok(command) =
+                    print3rs_commands::commands::parse_command.parse(command_string)
                 {
                     if let Err(msg) = self.commander.dispatch(command) {
                         self.error_messages.push(msg.0);
                     }
-                    self.command.clear();
+                    if !self.command_history.contains(command_string) {
+                        self.command_history.push_back(command_string.clone());
+                        if self.command_history.len() > 1000 {
+                            self.command_history.pop_front();
+                        }
+                        self.command_history.make_contiguous();
+                        self.command_state =
+                            ComboState::new(self.command_history.as_slices().0.to_owned());
+                    }
+                    command_string.clear();
                 } else {
                     self.error_messages
                         .push("Could not parse command".to_string());
