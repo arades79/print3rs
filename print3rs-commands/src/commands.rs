@@ -716,13 +716,17 @@ impl Commander {
                 let autoconnect_responder = self.responder.clone();
                 tokio::spawn(async move {
                     let printer = auto_connect().await;
-                    let message = if printer.is_connected() {"Found Printer!\n"} else {"No printer found.\n"};
+                    let response = if printer.is_connected() {
+                        Response::Output("Found Printer!\n".into())
+                    } else {
+                        Response::Error("No printer found.\n".into())
+                    };
                     if let Ok(printer_responses) = printer.subscribe_lines() {
                         let forward_responder = autoconnect_responder.clone();
                         Self::forward_broadcast(printer_responses, forward_responder);
                     }
                     let _ = autoconnect_responder.send(printer.into());
-                    let _ = autoconnect_responder.send(message.into());
+                    let _ = autoconnect_responder.send(response);
                 });
             }
             Disconnect => {
