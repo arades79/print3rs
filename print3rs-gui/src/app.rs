@@ -1,10 +1,11 @@
 use {
+    crate::components::{self, Console},
     iced::{
         alignment,
         futures::prelude::{future::err, stream::StreamExt},
         widget::button,
         window::{self, Action},
-        Application, Length,
+        Application, Length, Theme,
     },
     print3rs_commands::commands::{self, Response},
     print3rs_core::Printer,
@@ -46,11 +47,9 @@ pub(crate) struct App {
     pub(crate) commander: commands::Commander,
     pub(crate) bauds: ComboState<u32>,
     pub(crate) selected_baud: Option<u32>,
-    pub(crate) command: Option<String>,
-    pub(crate) command_history: VecDeque<String>,
-    pub(crate) command_state: ComboState<String>,
-    pub(crate) output: String,
+    pub(crate) console: Console,
     pub(crate) error_messages: Vec<String>,
+    pub(crate) theme: iced::Theme,
 }
 
 impl iced::Application for App {
@@ -76,11 +75,9 @@ impl iced::Application for App {
                 bauds: ComboState::new(vec![2400, 9600, 19200, 38400, 57600, 115200, 250000]),
                 selected_baud: Some(115200),
                 commander: Default::default(),
-                command: Default::default(),
-                command_history: Default::default(),
-                command_state: ComboState::new(vec![]),
-                output: Default::default(),
+                console: Default::default(),
                 error_messages: Default::default(),
+                theme: iced::Theme::Light,
             },
             iced::Command::none(),
         )
@@ -140,11 +137,11 @@ impl iced::Application for App {
                 Command::none()
             }
             Message::CommandInput(s) => {
-                self.command = Some(s);
+                self.console.command = Some(s);
                 Command::none()
             }
             Message::SubmitCommand => {
-                let Some(ref mut command_string) = self.command else {
+                let Some(ref mut command_string) = self.console.command else {
                     return Command::none();
                 };
                 if command_string.is_empty() {
@@ -156,14 +153,16 @@ impl iced::Application for App {
                     if let Err(msg) = self.commander.dispatch(command) {
                         self.error_messages.push(msg.0);
                     }
-                    if !self.command_history.contains(command_string) {
-                        self.command_history.push_back(command_string.clone());
-                        if self.command_history.len() > 1000 {
-                            self.command_history.pop_front();
+                    if !self.console.command_history.contains(command_string) {
+                        self.console
+                            .command_history
+                            .push_back(command_string.clone());
+                        if self.console.command_history.len() > 1000 {
+                            self.console.command_history.pop_front();
                         }
-                        self.command_history.make_contiguous();
-                        self.command_state =
-                            ComboState::new(self.command_history.as_slices().0.to_owned());
+                        self.console.command_history.make_contiguous();
+                        self.console.command_state =
+                            ComboState::new(self.console.command_history.as_slices().0.to_owned());
                     }
                     command_string.clear();
                 } else {
@@ -187,7 +186,12 @@ impl iced::Application for App {
                 Command::none()
             }
             Message::ConsoleAppend(s) => {
-                self.output.push_str(&s);
+                use iced::widget::text_editor::{Action, Edit};
+                for c in s.chars() {
+                    let action = Action::Edit(Edit::Insert(c));
+                    self.console.output.perform(action)
+                }
+                self.console.output.perform(Action::Edit(Edit::Enter));
                 Command::none()
             }
             Message::AutoConnectComplete(a_printer) => {
@@ -196,7 +200,7 @@ impl iced::Application for App {
                 Command::none()
             }
             Message::ClearConsole => {
-                self.output.clear();
+                self.console.output = iced::widget::text_editor::Content::new();
                 Command::none()
             }
             Message::Quit => Command::single(iced_runtime::command::Action::Window(Action::Close(
@@ -225,34 +229,44 @@ impl iced::Application for App {
                 },
             ),
             Message::SaveConsole(file) => {
-                Command::perform(tokio::fs::write(file, self.output.clone()), |_| {
+                Command::perform(tokio::fs::write(file, self.console.output.text()), |_| {
                     Message::NoOp
                 })
             }
             Message::PushError(msg) => {
-                for i in 0..10 {
-                    self.error_messages.push(format!("{msg} {i}"));
-                }
-
+                self.error_messages.push(msg);
                 Command::none()
             }
             Message::DismissError => {
                 self.error_messages.pop();
                 Command::none()
             }
+            Message::OutputAction(action) => {
+                if !action.is_edit() {
+                    self.console.output.perform(action);
+                }
+                Command::none()
+            }
             Message::NoOp => Command::none(),
+            Message::ChangeTheme(theme) => {
+                self.theme = theme;
+                Command::none()
+            }
         }
     }
 
     fn view(&self) -> iced::Element<'_, Self::Message, Self::Theme, iced::Renderer> {
-        use super::components;
         let screen = column![
             components::app_menu(self),
             components::connector(self),
             components::jogger(self),
-            components::console(self),
+            self.console.view(),
         ];
 
         components::error_prompt(self, screen).into()
+    }
+
+    fn theme(&self) -> Self::Theme {
+        self.theme.clone()
     }
 }

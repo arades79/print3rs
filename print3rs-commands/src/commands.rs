@@ -707,7 +707,8 @@ impl Commander {
                     self.printer.connect(port);
                     self.add_printer_output_to_responses();
                 } else {
-                    self.responder.send("Connection failed.\n".into())?;
+                    self.responder
+                        .send(Response::Error("Connection failed.\n".into()))?;
                 }
             }
             AutoConnect => {

@@ -51,6 +51,8 @@ pub(crate) enum Message {
     AutoConnectComplete(Arc<SerialPrinter>),
     PushError(String),
     DismissError,
+    OutputAction(iced::widget::text_editor::Action),
+    ChangeTheme(iced::Theme),
     NoOp,
 }
 
