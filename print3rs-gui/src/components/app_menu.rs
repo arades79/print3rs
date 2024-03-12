@@ -1,7 +1,6 @@
 use {
-    crate::app::AppElement,
     iced::{
-        widget::{button, column, pick_list, text},
+        widget::{button, column, text},
         Length,
     },
 };
