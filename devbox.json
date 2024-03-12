@@ -2,7 +2,9 @@
   "packages": [
     "rustup@latest",
     "libiconv@latest",
-    "libudev-zero@latest"
+    "libudev-zero@latest",
+    "oranda@latest",
+    "cargo-dist@latest"
   ],
   "shell": {
     "init_hook": [
@@ -20,7 +22,7 @@
       "run-console": "cargo run -p print3rs-console",
       "run-gui":     "cargo run -p print3rs-gui",
       "build":       "cargo build --release",
-      "build-debug":       "cargo build"
+      "build-debug": "cargo build"
     }
   }
 }

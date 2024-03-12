@@ -1,6 +1,26 @@
 {
   "lockfile_version": "1",
   "packages": {
+    "cargo-dist@latest": {
+      "last_modified": "2024-02-24T23:06:34Z",
+      "resolved": "github:NixOS/nixpkgs/9a9dae8f6319600fa9aebde37f340975cab4b8c0#cargo-dist",
+      "source": "devbox-search",
+      "version": "0.8.2",
+      "systems": {
+        "aarch64-darwin": {
+          "store_path": "/nix/store/4z6kj96wjck57xg19hhp4r064l4x944j-cargo-dist-0.8.2"
+        },
+        "aarch64-linux": {
+          "store_path": "/nix/store/xvzgpl4xw9vprx5sfxh79bz5r29b8x9d-cargo-dist-0.8.2"
+        },
+        "x86_64-darwin": {
+          "store_path": "/nix/store/60xqhwdfhpcsb87bq34p9dsxvwhn4hra-cargo-dist-0.8.2"
+        },
+        "x86_64-linux": {
+          "store_path": "/nix/store/9crbw084bvd0d29w7df4agnxqmhnmlz2-cargo-dist-0.8.2"
+        }
+      }
+    },
     "libiconv@latest": {
       "last_modified": "2024-02-10T18:15:24Z",
       "resolved": "github:NixOS/nixpkgs/10b813040df67c4039086db0f6eaf65c536886c6#libiconv",
@@ -26,6 +46,26 @@
         },
         "x86_64-linux": {
           "store_path": "/nix/store/ybrgk0r4wwkx70wyzlmh6mr1gif1bjk6-libudev-zero-1.0.3"
+        }
+      }
+    },
+    "oranda@latest": {
+      "last_modified": "2024-02-24T23:06:34Z",
+      "resolved": "github:NixOS/nixpkgs/9a9dae8f6319600fa9aebde37f340975cab4b8c0#oranda",
+      "source": "devbox-search",
+      "version": "0.6.2",
+      "systems": {
+        "aarch64-darwin": {
+          "store_path": "/nix/store/9s1w9sxp66wq0f3jg97mgs0js6w07sp8-oranda-0.6.2"
+        },
+        "aarch64-linux": {
+          "store_path": "/nix/store/xwz3gcg32ksprb8ld4fa6nas9v1phpgy-oranda-0.6.2"
+        },
+        "x86_64-darwin": {
+          "store_path": "/nix/store/zaaa8924p8z2y883vr7cmcrdhwjqizs5-oranda-0.6.2"
+        },
+        "x86_64-linux": {
+          "store_path": "/nix/store/fgddl4sb40vbrf0xd6jziiymwcp2qv26-oranda-0.6.2"
         }
       }
     },
