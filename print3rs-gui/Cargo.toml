@@ -1,10 +1,17 @@
 [package]
 name = "print3rs-gui"
+description = "A cross platform application to interact with a 3D printer (or other serial attached device)"
 version = "0.1.0"
 edition = "2021"
 license = "GPL-3.0-only"
 repository = "https://github.com/arades79/print3rs"
 authors = ["Skyelar Craver <contact@arades.dev>"]
+
+[package.metadata.wix]
+upgrade-guid = "16760A91-5CF1-464E-88B9-E1803C5F0327"
+path-guid = "9CDD86AF-78EF-4967-96C5-88457B62ADE9"
+license = false
+eula = false
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

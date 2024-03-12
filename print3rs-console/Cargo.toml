@@ -1,9 +1,16 @@
 [package]
 name = "print3rs-console"
+description = "An interactive terminal console to talk to a 3D printer (or other serial attached device)"
 version = "0.1.0"
 edition = "2021"
 license = "GPL-3.0-only"
 authors = ["Skyelar Craver <contact@arades.dev>"]
+
+[package.metadata.wix]
+upgrade-guid = "5DB27F18-CCEF-4B0D-9167-7E9A526A3BCC"
+path-guid = "899054C4-7ED4-4405-9AB5-C3BDAA7769F9"
+license = false
+eula = false
 
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
