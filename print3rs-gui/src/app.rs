@@ -1,19 +1,17 @@
+use crate::components::Console;
 use {
-    crate::components::{self, Console},
+    crate::components,
     iced::{
-        alignment,
-        futures::prelude::{future::err, stream::StreamExt},
-        widget::button,
+        futures::prelude::stream::StreamExt,
+        widget::column,
         window::{self, Action},
-        Application, Length, Theme,
     },
-    print3rs_commands::commands::{self, Response},
+    print3rs_commands::commands,
     print3rs_core::Printer,
-    std::{borrow::BorrowMut, collections::VecDeque, sync::Arc},
+    std::sync::Arc,
 };
 
 use iced::widget::combo_box::State as ComboState;
-use iced::widget::{column, text};
 use iced::Command;
 
 use print3rs_core::AsyncPrinterComm;
@@ -22,7 +20,7 @@ use tokio_stream::wrappers::BroadcastStream;
 
 use winnow::prelude::*;
 
-use rfd::{AsyncFileDialog, FileHandle};
+use rfd::AsyncFileDialog;
 
 use crate::messages::{JogMove, Message};
 

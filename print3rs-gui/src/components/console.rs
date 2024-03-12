@@ -1,14 +1,14 @@
 use {
     iced::{
         widget::{
-            button, column, combo_box, combo_box::State as ComboState, container, row, text_editor,
+            button, column, combo_box, combo_box::State as ComboState, row, text_editor,
         },
         Length,
     },
     std::collections::VecDeque,
 };
 
-use crate::app::{App, AppElement};
+use crate::app::{AppElement};
 use crate::messages::Message;
 use iced::widget::text_editor::Content;
 
