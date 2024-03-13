@@ -16,6 +16,10 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
+    - name: Install jq tool
+      run: |
+        sudo apt update
+        sudo apt install libudev-dev
     - name: Build
       run: cargo build --verbose
     - name: Check
