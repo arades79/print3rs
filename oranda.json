@@ -1,0 +1,8 @@
+{
+    "build": {
+        "path_prefix": "print3rs"
+    },
+    "styles": {
+        "theme": "hacker"
+    }
+}
