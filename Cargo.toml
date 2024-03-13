@@ -3,10 +3,10 @@
 [workspace]
 members = [
     "print3rs-core",
-    "gcode-serializer",
+    "print3rs-serializer",
     "print3rs-commands",
-    "print3rs-console",
-    "print3rs-gui",
+    "print3rs-lin3d",
+    "print3rs-host3d",
 ]
 resolver = "2"
 

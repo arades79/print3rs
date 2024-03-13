@@ -1,5 +1,5 @@
 [package]
-name = "gcode-serializer"
+name = "print3rs-serializer"
 description = "Gcode serde support for comminucating with 3D printers or CNC machines. Part of the print3rs project."
 version = "0.1.0"
 edition = "2021"

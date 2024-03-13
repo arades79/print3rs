@@ -60,7 +60,7 @@
 
     <Product
         Id='*'
-        Name='print3rs-console'
+        Name='lin3d'
         UpgradeCode='5DB27F18-CCEF-4B0D-9167-7E9A526A3BCC'
         Manufacturer='Skyelar Craver'
         Language='1033'
@@ -69,7 +69,7 @@
 
         <Package Id='*'
             Keywords='Installer'
-            Description='An interactive terminal console to talk to a 3D printer (or other serial attached device)'
+            Description='Cross platform console 3D-printer host'
             Manufacturer='Skyelar Craver'
             InstallerVersion='450'
             Languages='1033'
@@ -83,11 +83,11 @@
             DowngradeErrorMessage='A newer version of [ProductName] is already installed. Setup will now exit.'/>
 
         <Media Id='1' Cabinet='media1.cab' EmbedCab='yes' DiskPrompt='CD-ROM #1'/>
-        <Property Id='DiskPrompt' Value='print3rs-console Installation'/>
+        <Property Id='DiskPrompt' Value='lin3d Installation'/>
 
         <Directory Id='TARGETDIR' Name='SourceDir'>
             <Directory Id='$(var.PlatformProgramFilesFolder)' Name='PFiles'>
-                <Directory Id='APPLICATIONFOLDER' Name='print3rs-console'>
+                <Directory Id='APPLICATIONFOLDER' Name='lin3d'>
                     
                     <!--
                       Enabling the license sidecar file in the installer is a four step process:
@@ -123,9 +123,9 @@
                         <Component Id='binary0' Guid='*'>
                             <File
                                 Id='exe0'
-                                Name='print3rs-console.exe'
+                                Name='lin3d.exe'
                                 DiskId='1'
-                                Source='$(var.CargoTargetBinDir)\print3rs-console.exe'
+                                Source='$(var.CargoTargetBinDir)\lin3d.exe'
                                 KeyPath='yes'/>
                         </Component>
                     </Directory>
