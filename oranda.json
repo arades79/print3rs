@@ -1,8 +1,18 @@
 {
+    "project": {
+        "name": "Print3rs Toolkit",
+        "repository": "https://github.com/print3rs/print3rs"
+    },
     "build": {
         "path_prefix": "print3rs"
     },
     "styles": {
         "theme": "hacker"
+    },
+    "components": {
+        "changelog": true,
+        "artifacts": {
+            "cargo_dist": true
+        }
     }
 }
