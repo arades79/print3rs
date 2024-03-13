@@ -1,7 +1,10 @@
 use {
     core::borrow::Borrow,
-    std::sync::Arc,
-    std::{collections::HashMap, time::Duration},
+    std::{
+        collections::HashMap,
+        sync::{Arc, Mutex},
+        time::Duration,
+    },
 };
 
 use winnow::{
@@ -508,7 +511,7 @@ pub fn send_gcodes(
 pub enum Response {
     Output(String),
     Error(ErrorKindOf),
-    AutoConnect(Arc<SerialPrinter>),
+    AutoConnect(Arc<Mutex<SerialPrinter>>),
     Clear,
     Quit,
 }
@@ -533,7 +536,7 @@ impl From<ErrorKindOf> for Response {
 
 impl From<SerialPrinter> for Response {
     fn from(value: SerialPrinter) -> Self {
-        Response::AutoConnect(Arc::new(value))
+        Response::AutoConnect(Arc::new(Mutex::new(value)))
     }
 }
 

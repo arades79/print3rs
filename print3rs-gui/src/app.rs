@@ -193,7 +193,10 @@ impl iced::Application for App {
                 Command::none()
             }
             Message::AutoConnectComplete(a_printer) => {
-                let printer = Arc::into_inner(a_printer).unwrap_or_default();
+                let printer = Arc::into_inner(a_printer)
+                    .unwrap_or_default()
+                    .into_inner()
+                    .unwrap_or_default();
                 self.commander.set_printer(printer);
                 Command::none()
             }
