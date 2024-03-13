@@ -6,6 +6,8 @@ edition = "2021"
 license = "GPL-3.0-only"
 repository = "https://github.com/arades79/print3rs"
 authors = ["Skyelar Craver <contact@arades.dev>"]
+rust-version = "1.76"
+
 
 [package.metadata.wix]
 upgrade-guid = "16760A91-5CF1-464E-88B9-E1803C5F0327"

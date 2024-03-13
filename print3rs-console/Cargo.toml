@@ -5,6 +5,8 @@ version = "0.1.0"
 edition = "2021"
 license = "GPL-3.0-only"
 authors = ["Skyelar Craver <contact@arades.dev>"]
+rust-version = "1.76"
+
 
 [package.metadata.wix]
 upgrade-guid = "5DB27F18-CCEF-4B0D-9167-7E9A526A3BCC"

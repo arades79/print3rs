@@ -72,7 +72,7 @@ async fn main() -> Result<(), AppError> {
                         writer.write_all(format!("Error: {}", e.0).as_bytes()).await?;
                     },
                     commands::Response::AutoConnect(a_printer) => {
-                        commander.set_printer(Arc::into_inner(a_printer).unwrap_or_default());
+                        commander.set_printer(Arc::into_inner(a_printer).unwrap_or_default().into_inner().unwrap_or_default());
                     },
                     commands::Response::Clear => {
                         readline.clear()?;
