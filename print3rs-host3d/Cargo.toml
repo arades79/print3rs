@@ -1,6 +1,6 @@
 [package]
-name = "print3rs-gui"
-description = "A cross platform application to interact with a 3D printer (or other serial attached device)"
+name = "host3d"
+description = "Cross-platform graphical 3D-printer host"
 version = "0.1.0"
 edition = "2021"
 license = "GPL-3.0-only"
@@ -19,7 +19,7 @@ eula = false
 
 [dependencies]
 print3rs-core = { path = "../print3rs-core" }
-gcode-serializer = { path = "../gcode-serializer" }
+print3rs-serializer = { path = "../print3rs-serializer" }
 print3rs-commands = { path = "../print3rs-commands" }
 iced = { version = "0.12.1", features = ["tokio"] }
 tokio-serial = { version = "5.4.4", features = ["libudev"] }

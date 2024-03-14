@@ -9,7 +9,7 @@ use response::response;
 pub use response::Response;
 use tokio_serial::SerialStream;
 
-use gcode_serializer::{serialize_unsequenced, Sequenced};
+use print3rs_serializer::{serialize_unsequenced, Sequenced};
 
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},

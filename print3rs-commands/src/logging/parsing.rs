@@ -179,7 +179,7 @@ mod tests {
     fn test_headers() {
         let segments = [Tag("one"), Value("two"), Tag("three"), Value("four")];
         let headers = get_headers(&segments);
-        assert_eq!(&headers, "two,four,");
+        assert_eq!(&headers, "two,four\n");
     }
 
     #[test]
