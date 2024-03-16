@@ -2630,7 +2630,6 @@ dependencies = [
  "serde",
  "thiserror",
  "tokio",
- "tokio-serial",
  "tracing",
  "winnow 0.6.5",
 ]

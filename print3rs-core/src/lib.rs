@@ -7,7 +7,6 @@ mod response;
 
 use response::response;
 pub use response::Response;
-use tokio_serial::SerialStream;
 
 use print3rs_serializer::{serialize_unsequenced, Sequenced};
 
@@ -21,7 +20,6 @@ use sealed::sealed;
 
 use bytes::{Bytes, BytesMut};
 
-pub type Serial = SerialStream;
 pub type LineStream = broadcast::Receiver<Bytes>;
 
 #[sealed]
@@ -175,8 +173,6 @@ pub enum Printer<Transport> {
         _transport: PhantomData<Transport>,
     },
 }
-
-pub type SerialPrinter = Printer<Serial>;
 
 impl<S> Drop for Printer<S> {
     fn drop(&mut self) {

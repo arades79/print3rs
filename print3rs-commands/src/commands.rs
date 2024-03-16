@@ -2,9 +2,12 @@ use {
     core::borrow::Borrow,
     std::{
         collections::HashMap,
+        fmt::Debug,
         sync::{Arc, Mutex},
         time::Duration,
     },
+    tokio::io::{AsyncRead, AsyncWrite},
+    tokio_serial::SerialStream,
 };
 
 use winnow::{
@@ -16,31 +19,53 @@ use winnow::{
 
 use tokio::{io::AsyncWriteExt, task::JoinHandle, time::timeout};
 
-use print3rs_core::{AsyncPrinterComm, Error as PrinterError, Printer, SerialPrinter};
+use print3rs_core::{AsyncPrinterComm, Error as PrinterError, Printer};
 use tokio_serial::{available_ports, SerialPort, SerialPortBuilderExt, SerialPortInfo};
 
-async fn check_port(port: SerialPortInfo) -> Option<SerialPrinter> {
-    tracing::debug!("checking port {}...", port.port_name);
-    let mut printer_port = tokio_serial::new(port.port_name, 115200)
-        .timeout(Duration::from_secs(10))
-        .open_native_async()
-        .ok()?;
-    printer_port.write_data_terminal_ready(true).ok()?;
-    let mut printer = SerialPrinter::new(printer_port);
+type SerialPrinter = Printer<SerialStream>;
 
-    printer.send_raw(b"M115\n").ok()?;
-    let look_for_ok = async {
-        while let Ok(line) = printer.read_next_line().await {
-            let sline = String::from_utf8_lossy(&line);
-            if sline.to_ascii_lowercase().contains("ok") {
-                return Some(printer);
+trait AutoConnect {
+    type Transport;
+    async fn auto_connect() -> Printer<Self::Transport>;
+}
+
+impl AutoConnect for SerialPrinter {
+    type Transport = SerialStream;
+    async fn auto_connect() -> Printer<SerialStream> {
+        async fn check_port(port: SerialPortInfo) -> Option<SerialPrinter> {
+            tracing::debug!("checking port {}...", port.port_name);
+            let mut printer_port = tokio_serial::new(port.port_name, 115200)
+                .timeout(Duration::from_secs(10))
+                .open_native_async()
+                .ok()?;
+            printer_port.write_data_terminal_ready(true).ok()?;
+            let mut printer = SerialPrinter::new(printer_port);
+
+            printer.send_raw(b"M115\n").ok()?;
+            let look_for_ok = async {
+                while let Ok(line) = printer.read_next_line().await {
+                    let sline = String::from_utf8_lossy(&line);
+                    if sline.to_ascii_lowercase().contains("ok") {
+                        return Some(printer);
+                    }
+                }
+                None
+            };
+
+            timeout(Duration::from_secs(5), look_for_ok).await.ok()?
+        }
+        if let Ok(ports) = available_ports() {
+            tracing::info!("found available ports: {ports:?}");
+            for port in ports {
+                if let Some(printer) = check_port(port).await {
+                    return printer;
+                }
             }
         }
-        None
-    };
-
-    timeout(Duration::from_secs(5), look_for_ok).await.ok()?
+        Printer::Disconnected
+    }
 }
+
 pub struct InfiniteRecursion;
 type MacrosInner = HashMap<String, Vec<String>>;
 #[derive(Debug, Default)]
@@ -115,16 +140,12 @@ impl Macros {
     }
 }
 
-pub async fn auto_connect() -> SerialPrinter {
-    if let Ok(ports) = available_ports() {
-        tracing::info!("found available ports: {ports:?}");
-        for port in ports {
-            if let Some(printer) = check_port(port).await {
-                return printer;
-            }
-        }
-    }
-    Printer::Disconnected
+#[allow(private_bounds)]
+pub async fn auto_connect<Transport>() -> Printer<Transport>
+where
+    Printer<Transport>: AutoConnect<Transport = Transport>,
+{
+    Printer::auto_connect().await
 }
 
 pub fn version() -> &'static str {
@@ -429,10 +450,10 @@ enum TaskError {
     Join(#[from] tokio::task::JoinError),
 }
 
-pub fn start_logging<Transport>(
+pub fn start_logging(
     name: &str,
     pattern: Vec<crate::logging::parsing::Segment<&'_ str>>,
-    printer: &Printer<Transport>,
+    printer: &impl AsyncPrinterComm,
 ) -> std::result::Result<BackgroundTask, print3rs_core::Error> {
     let filename = format!(
         "{name}_{timestamp}.csv",
@@ -545,8 +566,8 @@ type ResponseSender = tokio::sync::broadcast::Sender<Response>;
 type ResponseReceiver = tokio::sync::broadcast::Receiver<Response>;
 
 #[derive(Debug)]
-pub struct Commander {
-    printer: SerialPrinter,
+pub struct Commander<Transport> {
+    printer: Printer<Transport>,
     pub tasks: Tasks,
     pub macros: Macros,
     responder: ResponseSender,
@@ -563,13 +584,24 @@ where
     }
 }
 
-impl Default for Commander {
+impl<T> Default for Commander<T> {
     fn default() -> Self {
         Commander::new()
     }
 }
 
-impl Commander {
+#[derive(Debug, Clone, Copy)]
+pub struct ConnectParams<'a>(&'a str, Option<u32>);
+
+impl<'a> TryFrom<ConnectParams<'a>> for SerialStream {
+    type Error = tokio_serial::Error;
+
+    fn try_from(value: ConnectParams<'a>) -> Result<Self, Self::Error> {
+        tokio_serial::new(value.0, value.1.unwrap_or(115200)).open_native_async()
+    }
+}
+
+impl<T> Commander<T> {
     pub fn new() -> Self {
         let (responder, _) = tokio::sync::broadcast::channel(32);
         Self {
@@ -580,11 +612,11 @@ impl Commander {
         }
     }
 
-    pub fn printer(&self) -> &SerialPrinter {
+    pub fn printer(&self) -> &Printer<T> {
         &self.printer
     }
 
-    pub fn set_printer(&mut self, printer: SerialPrinter) {
+    pub fn set_printer(&mut self, printer: Printer<T>) {
         self.tasks.clear();
         self.printer = printer;
     }
@@ -615,7 +647,11 @@ impl Commander {
         }
     }
 
-    pub fn background(mut self, mut commands: CommandReceiver) -> tokio::task::JoinHandle<()> {
+    pub fn background(mut self, mut commands: CommandReceiver) -> tokio::task::JoinHandle<()>
+    where
+        T: Send + AsyncRead + AsyncWrite + Unpin + Debug + 'static,
+        for<'a> T: TryFrom<ConnectParams<'a>>,
+    {
         tokio::spawn(async move {
             loop {
                 while let Some(command) = commands.recv().await {
@@ -630,7 +666,10 @@ impl Commander {
     pub fn dispatch<'a>(
         &'a mut self,
         command: impl Into<Command<&'a str>>,
-    ) -> Result<(), ErrorKindOf> {
+    ) -> Result<(), ErrorKindOf>
+    where
+        T: AsyncRead + AsyncWrite + Unpin + Send + Debug + 'static + TryFrom<ConnectParams<'a>>,
+    {
         let command = command.into();
         use Command::*;
         const DISCONNECTED_ERROR: &str = "No printer is connected!\n";
@@ -703,9 +742,7 @@ impl Commander {
                 self.macros.remove(name);
             }
             Connect(path, baud) => {
-                if let Ok(port) =
-                    tokio_serial::new(path, baud.unwrap_or(115200)).open_native_async()
-                {
+                if let Ok(port) = ConnectParams(path, baud).try_into() {
                     self.tasks.clear();
                     self.printer.connect(port);
                     self.add_printer_output_to_responses();
