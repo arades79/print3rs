@@ -2,7 +2,11 @@
 //!  A shell to talk to 3D printers or other Gcode accepting serial devices, inspired by Pronsole
 //!
 
-use {print3rs_core::SerialPrinter, std::fmt::Debug, std::sync::Arc};
+use {
+    print3rs_core::Printer,
+    std::{fmt::Debug, sync::Arc},
+    tokio_serial::SerialStream,
+};
 
 use futures_util::AsyncWriteExt;
 use rustyline_async::{Readline, ReadlineEvent, SharedWriter};
@@ -23,7 +27,7 @@ enum AppError {
     Writer(#[from] futures_util::io::Error),
 }
 
-fn prompt_string(printer: &SerialPrinter) -> String {
+fn prompt_string(printer: &Printer<SerialStream>) -> String {
     let status = match printer {
         print3rs_core::Printer::Disconnected => "Disconnected",
         print3rs_core::Printer::Connected { .. } => "Connected",

@@ -1,10 +1,11 @@
 use {
     print3rs_commands::commands::{Command, Response},
-    print3rs_core::SerialPrinter,
+    print3rs_core::Printer,
     std::{
         path::PathBuf,
         sync::{Arc, Mutex},
     },
+    tokio_serial::SerialStream,
 };
 
 #[derive(Debug, Clone, Default)]
@@ -50,7 +51,7 @@ pub(crate) enum Message {
     SaveDialog,
     SaveConsole(PathBuf),
     ConsoleAppend(String),
-    AutoConnectComplete(Arc<Mutex<SerialPrinter>>),
+    AutoConnectComplete(Arc<Mutex<Printer<SerialStream>>>),
     PushError(String),
     DismissError,
     OutputAction(iced::widget::text_editor::Action),

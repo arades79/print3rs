@@ -1,4 +1,3 @@
-use crate::components::Console;
 use {
     crate::components,
     iced::{
@@ -10,6 +9,7 @@ use {
     print3rs_core::Printer,
     std::sync::Arc,
 };
+use {crate::components::Console, tokio_serial::SerialStream};
 
 use iced::widget::combo_box::State as ComboState;
 use iced::Command;
@@ -42,7 +42,7 @@ where
 pub(crate) struct App {
     pub(crate) ports: ComboState<String>,
     pub(crate) selected_port: Option<String>,
-    pub(crate) commander: commands::Commander,
+    pub(crate) commander: commands::Commander<SerialStream>,
     pub(crate) bauds: ComboState<u32>,
     pub(crate) selected_baud: Option<u32>,
     pub(crate) console: Console,
