@@ -18,30 +18,53 @@ use sealed::sealed;
 
 pub type LineStream = broadcast::Receiver<Arc<[u8]>>;
 
-trait Task: Future {
+trait Task: Future + Debug {
     fn cancel(&mut self);
 }
 
 trait Spawner {
-    type Transform<T>;
+    type Transform<T>: Debug
+    where
+        T: Debug;
     fn spawn<F: Future + Send + 'static>(
         &self,
         fut: F,
     ) -> impl Task<Output = Self::Transform<F::Output>>
     where
-        F::Output: Send + 'static;
+        F::Output: Send + 'static + Debug;
 }
 
 #[cfg(feature = "tokio")]
-impl<T> Task for tokio::task::JoinHandle<T> {
+impl<T: Debug> Task for tokio::task::JoinHandle<T> {
     fn cancel(&mut self) {
         self.abort()
     }
 }
 
+#[cfg(feature = "smol")]
+impl<T> Task for smol::Task<T> {
+    fn cancel(&mut self) {
+        core::mem::drop(x)
+    }
+}
+
 #[cfg(feature = "tokio")]
 impl Spawner for tokio::runtime::Handle {
-    type Transform<T> = Result<T, tokio::task::JoinError>;
+    type Transform<T> = Result<T, tokio::task::JoinError> where T: Debug;
+    fn spawn<F: Future + Send + 'static>(
+        &self,
+        fut: F,
+    ) -> impl Task<Output = Self::Transform<F::Output>>
+    where
+        F::Output: Send + 'static + Debug,
+    {
+        self.spawn(fut)
+    }
+}
+
+#[cfg(feature = "smol")]
+impl Spawner for smol::Executor {
+    type Transform<T> = T;
     fn spawn<F: Future + Send + 'static>(
         &self,
         fut: F,
@@ -56,21 +79,15 @@ impl Spawner for tokio::runtime::Handle {
 #[cfg(feature = "tokio")]
 type GlobalSpawner = tokio::runtime::Handle;
 
+#[cfg(all(feature = "smol", not(feature = "tokio")))]
+type GlobalSpawner = smol::Executor;
+
 fn default_spawner() -> GlobalSpawner
 where
     GlobalSpawner: Spawner,
 {
     #[cfg(feature = "tokio")]
     tokio::runtime::Handle::current()
-}
-
-impl<T> Debug for Box<dyn Task<Output = T>>
-where
-    T: Debug,
-{
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_tuple("Box").finish()
-    }
 }
 
 #[sealed]
