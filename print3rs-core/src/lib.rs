@@ -1,4 +1,10 @@
-use std::{fmt::Debug, future::Future, marker::PhantomData, ops::Deref};
+use {
+    std::{
+        collections::VecDeque, fmt::Debug, future::Future, marker::PhantomData, ops::Deref,
+        sync::Arc,
+    },
+    tokio::io::AsyncBufRead,
+};
 
 use serde::Serialize;
 use winnow::Parser;
@@ -11,16 +17,14 @@ pub use response::Response;
 use print3rs_serializer::{serialize_unsequenced, Sequenced};
 
 use tokio::{
-    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
+    io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     sync::{broadcast, mpsc},
     task::JoinHandle,
 };
 
 use sealed::sealed;
 
-use bytes::{Bytes, BytesMut};
-
-pub type LineStream = broadcast::Receiver<Bytes>;
+pub type LineStream = broadcast::Receiver<Arc<[u8]>>;
 
 trait Task: Future {
     fn cancel(&mut self);
@@ -103,7 +107,7 @@ pub trait AsyncPrinterComm {
     /// May not recieve all lines, if calls to this function are spaced
     /// far apart, the buffer may overfill and the oldest messages will
     /// be dropped. In this case the oldest available message is returned.
-    async fn read_next_line(&mut self) -> Result<Bytes, DisconnectedError>;
+    async fn read_next_line(&mut self) -> Result<Arc<[u8]>, DisconnectedError>;
 
     /// Obtain a broadcast receiver returning all lines received by the printer
     fn subscribe_lines(&self) -> Result<LineStream, DisconnectedError>;
@@ -131,7 +135,7 @@ pub async fn search_for_sequence(sequence: i32, mut responses: LineStream) -> Re
 pub struct Socket {
     sender: mpsc::Sender<Box<[u8]>>,
     serializer: Sequenced,
-    pub responses: broadcast::Receiver<Bytes>,
+    pub responses: broadcast::Receiver<Arc<[u8]>>,
 }
 
 impl Clone for Socket {
@@ -189,7 +193,7 @@ impl AsyncPrinterComm for Socket {
     /// May not recieve all lines, if calls to this function are spaced
     /// far apart, the buffer may overfill and the oldest messages will
     /// be dropped. In this case the oldest available message is returned.
-    async fn read_next_line(&mut self) -> Result<Bytes, DisconnectedError> {
+    async fn read_next_line(&mut self) -> Result<Arc<[u8]>, DisconnectedError> {
         loop {
             match self.responses.recv().await {
                 Ok(line) => break Ok(line),
@@ -235,7 +239,7 @@ pub enum Error {
     IO(#[from] std::io::Error),
 
     #[error("Background task failed to propagate message from printer\nError message: {0}")]
-    ResponseSender(#[from] broadcast::error::SendError<Bytes>),
+    ResponseSender(#[from] broadcast::error::SendError<Arc<[u8]>>),
 
     #[error("Send queue full or closed")]
     Sender(#[from] tokio::sync::mpsc::error::TrySendError<std::boxed::Box<[u8]>>),
@@ -255,12 +259,13 @@ pub enum DisconnectedError {
 
 /// Loop for handling sending/receiving in the background with possible split senders/receivers
 async fn printer_com_task(
-    mut transport: impl AsyncRead + AsyncWrite + Unpin,
+    mut transport: impl AsyncBufRead + AsyncWrite + Unpin,
     mut gcoderx: mpsc::Receiver<Box<[u8]>>,
-    responsetx: broadcast::Sender<Bytes>,
+    responsetx: broadcast::Sender<Arc<[u8]>>,
 ) {
-    let mut buf = BytesMut::with_capacity(1024);
     tracing::debug!("Started background printer communications");
+    let mut line = String::new();
+
     loop {
         tokio::select! {
             Some(line) = gcoderx.recv() => {
@@ -268,12 +273,11 @@ async fn printer_com_task(
                 if transport.flush().await.is_err() {return;}
                 tracing::debug!("Sent `{}` to printer", String::from_utf8_lossy(&line).trim());
             },
-            Ok(1..) = transport.read_buf(&mut buf) => {
-                while let Some(n) = buf.iter().position(|b| *b == b'\n') {
-                    let line = buf.split_to(n + 1).freeze();
-                    tracing::debug!("Received `{}` from printer", String::from_utf8_lossy(&line).trim());
-                    if responsetx.send(line).is_err() {return;}
-                }
+            Ok(1..) = transport.read_line(&mut line) => {
+                tracing::debug!("Received `{line}` from printer");
+                line.push('\n');
+                let line: Arc<[u8]> = Arc::from(line.split_off(0).into_bytes());
+                if responsetx.send(line).is_err() {return;}
             },
             else => return,
         }
@@ -287,7 +291,7 @@ impl<S> Printer<S> {
     #[tracing::instrument(level = "debug")]
     pub fn new(port: S) -> Self
     where
-        S: AsyncRead + AsyncWrite + Unpin + Send + 'static + Debug,
+        S: AsyncBufRead + AsyncWrite + Unpin + Send + 'static + Debug,
     {
         let (sender, gcoderx) = mpsc::channel::<Box<[u8]>>(8);
         let (response_sender, responses) = broadcast::channel(64);
@@ -308,7 +312,7 @@ impl<S> Printer<S> {
     /// Connect to a device
     pub fn connect(&mut self, port: S)
     where
-        S: AsyncRead + AsyncWrite + Unpin + Send + 'static + Debug,
+        S: AsyncBufRead + AsyncWrite + Unpin + Send + 'static + Debug,
     {
         *self = Printer::new(port);
     }
@@ -366,7 +370,7 @@ impl<S> AsyncPrinterComm for Printer<S> {
         socket.send_raw(gcode)
     }
 
-    async fn read_next_line(&mut self) -> Result<Bytes, DisconnectedError> {
+    async fn read_next_line(&mut self) -> Result<Arc<[u8]>, DisconnectedError> {
         let socket = self.socket_mut()?;
         socket
             .read_next_line()
