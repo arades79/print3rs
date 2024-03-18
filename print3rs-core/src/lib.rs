@@ -1,4 +1,4 @@
-use std::{fmt::Debug, marker::PhantomData};
+use std::{fmt::Debug, future::Future, marker::PhantomData};
 
 use serde::Serialize;
 use winnow::Parser;
@@ -13,7 +13,6 @@ use print3rs_serializer::{serialize_unsequenced, Sequenced};
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     sync::{broadcast, mpsc},
-    task::JoinHandle,
 };
 
 use sealed::sealed;
@@ -21,6 +20,57 @@ use sealed::sealed;
 use bytes::{Bytes, BytesMut};
 
 pub type LineStream = broadcast::Receiver<Bytes>;
+
+trait Task: Future {
+    fn cancel(&mut self);
+}
+
+trait Spawner {
+    type Transform<T>;
+    fn spawn<F: Future + Send + 'static>(
+        &self,
+        fut: F,
+    ) -> impl Task<Output = Self::Transform<F::Output>>
+    where
+        F::Output: Send + 'static;
+}
+
+impl<T> Task for tokio::task::JoinHandle<T> {
+    fn cancel(&mut self) {
+        self.abort()
+    }
+}
+
+impl Spawner for tokio::runtime::Handle {
+    type Transform<T> = Result<T, tokio::task::JoinError>;
+    fn spawn<F: Future + Send + 'static>(
+        &self,
+        fut: F,
+    ) -> impl Task<Output = Self::Transform<F::Output>>
+    where
+        F::Output: Send + 'static,
+    {
+        self.spawn(fut)
+    }
+}
+
+type GlobalSpawner = tokio::runtime::Handle;
+
+fn default_spawner() -> GlobalSpawner
+where
+    GlobalSpawner: Spawner,
+{
+    tokio::runtime::Handle::current()
+}
+
+impl<T> Debug for Box<dyn Task<Output = T>>
+where
+    T: Debug,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("Box").finish()
+    }
+}
 
 #[sealed]
 #[allow(async_fn_in_trait)]
@@ -162,6 +212,8 @@ impl AsyncPrinterComm for Socket {
     }
 }
 
+type PrinterTask = dyn Task<Output = <GlobalSpawner as Spawner>::Transform<()>>;
+
 /// Handle for asynchronous serial communication with a 3D printer
 #[derive(Debug, Default)]
 pub enum Printer<Transport> {
@@ -169,7 +221,7 @@ pub enum Printer<Transport> {
     Disconnected,
     Connected {
         socket: Socket,
-        com_task: tokio::task::JoinHandle<()>,
+        com_task: Box<PrinterTask>,
         _transport: PhantomData<Transport>,
     },
 }
@@ -177,7 +229,7 @@ pub enum Printer<Transport> {
 impl<S> Drop for Printer<S> {
     fn drop(&mut self) {
         if let Self::Connected { com_task, .. } = self {
-            com_task.abort()
+            com_task.cancel()
         }
     }
 }
@@ -244,7 +296,8 @@ impl<S> Printer<S> {
     {
         let (sender, gcoderx) = mpsc::channel::<Box<[u8]>>(8);
         let (response_sender, responses) = broadcast::channel(64);
-        let com_task = tokio::task::spawn(printer_com_task(port, gcoderx, response_sender));
+        let com_task = default_spawner().spawn(printer_com_task(port, gcoderx, response_sender));
+        let com_task = Box::new(com_task);
         let serializer = Sequenced::default();
         Self::Connected {
             socket: Socket {
@@ -293,10 +346,10 @@ impl<S> Printer<S> {
         }
     }
 
-    pub fn background_task(&self) -> Option<&JoinHandle<()>> {
+    pub fn background_task(&self) -> Option<&PrinterTask> {
         match self {
             Printer::Disconnected => None,
-            Printer::Connected { com_task, .. } => Some(com_task),
+            Printer::Connected { com_task, .. } => Some(com_task.as_ref()),
         }
     }
 }
