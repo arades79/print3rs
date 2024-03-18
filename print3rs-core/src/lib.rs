@@ -1,4 +1,4 @@
-use std::{fmt::Debug, future::Future, marker::PhantomData};
+use std::{fmt::Debug, future::Future, marker::PhantomData, ops::Deref};
 
 use serde::Serialize;
 use winnow::Parser;
@@ -13,6 +13,7 @@ use print3rs_serializer::{serialize_unsequenced, Sequenced};
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     sync::{broadcast, mpsc},
+    task::JoinHandle,
 };
 
 use sealed::sealed;
@@ -83,10 +84,7 @@ pub trait AsyncPrinterComm {
     /// When called, a local task is spawned to check for a matching OK message.
     /// The handle to this task is returned after the first await on success.
     /// This allows simple synchronization of any sent command by awaiting twice.
-    async fn send(
-        &self,
-        gcode: impl Serialize + Debug,
-    ) -> Result<tokio::task::JoinHandle<Response>, Error>;
+    async fn send(&self, gcode: impl Serialize + Debug) -> Result<impl Task, Error>;
 
     /// Serialize anything implementing Serialize and send the bytes to the printer
     ///
@@ -157,16 +155,13 @@ impl AsyncPrinterComm for Socket {
     /// The handle to this task is returned after the first await on success.
     /// This allows simple synchronization of any sent command by awaiting twice.
     #[tracing::instrument(level = "debug", skip(self))]
-    async fn send(
-        &self,
-        gcode: impl Serialize + Debug,
-    ) -> Result<tokio::task::JoinHandle<Response>, Error> {
+    async fn send(&self, gcode: impl Serialize + Debug) -> Result<impl Task, Error> {
         let send_slot = self.sender.reserve().await?;
         let (sequence, bytes) = self.serializer.serialize(gcode);
         let sequenced_ok_watch = self.subscribe_lines().expect("Socket is always connected");
         send_slot.send(bytes);
         let wait_for_response =
-            tokio::task::spawn(search_for_sequence(sequence, sequenced_ok_watch));
+            default_spawner().spawn(search_for_sequence(sequence, sequenced_ok_watch));
         Ok(wait_for_response)
     }
 
@@ -212,7 +207,7 @@ impl AsyncPrinterComm for Socket {
     }
 }
 
-type PrinterTask = dyn Task<Output = <GlobalSpawner as Spawner>::Transform<()>>;
+type BackgroundTask<T> = dyn Task<Output = <GlobalSpawner as Spawner>::Transform<T>>;
 
 /// Handle for asynchronous serial communication with a 3D printer
 #[derive(Debug, Default)]
@@ -221,7 +216,7 @@ pub enum Printer<Transport> {
     Disconnected,
     Connected {
         socket: Socket,
-        com_task: Box<PrinterTask>,
+        com_task: Box<BackgroundTask<()>>,
         _transport: PhantomData<Transport>,
     },
 }
@@ -346,7 +341,7 @@ impl<S> Printer<S> {
         }
     }
 
-    pub fn background_task(&self) -> Option<&PrinterTask> {
+    pub fn background_task(&self) -> Option<&BackgroundTask<()>> {
         match self {
             Printer::Disconnected => None,
             Printer::Connected { com_task, .. } => Some(com_task.as_ref()),
@@ -356,10 +351,7 @@ impl<S> Printer<S> {
 
 #[sealed]
 impl<S> AsyncPrinterComm for Printer<S> {
-    async fn send(
-        &self,
-        gcode: impl Serialize + Debug,
-    ) -> Result<tokio::task::JoinHandle<Response>, Error> {
+    async fn send(&self, gcode: impl Serialize + Debug) -> Result<impl Task, Error> {
         let socket = self.socket()?;
         socket.send(gcode).await
     }
