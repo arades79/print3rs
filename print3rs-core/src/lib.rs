@@ -1,10 +1,4 @@
-use {
-    std::{
-        collections::VecDeque, fmt::Debug, future::Future, marker::PhantomData, ops::Deref,
-        sync::Arc,
-    },
-    tokio::io::AsyncBufRead,
-};
+use std::{fmt::Debug, marker::PhantomData, sync::Arc};
 
 use serde::Serialize;
 use winnow::Parser;
@@ -16,11 +10,9 @@ pub use response::Response;
 
 use print3rs_serializer::{serialize_unsequenced, Sequenced};
 
-use tokio::{
-    io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
-    sync::{broadcast, mpsc},
-    task::JoinHandle,
-};
+use futures_lite::prelude::*;
+
+use tokio::sync::{broadcast, mpsc};
 
 use sealed::sealed;
 
@@ -40,12 +32,14 @@ trait Spawner {
         F::Output: Send + 'static;
 }
 
+#[cfg(feature = "tokio")]
 impl<T> Task for tokio::task::JoinHandle<T> {
     fn cancel(&mut self) {
         self.abort()
     }
 }
 
+#[cfg(feature = "tokio")]
 impl Spawner for tokio::runtime::Handle {
     type Transform<T> = Result<T, tokio::task::JoinError>;
     fn spawn<F: Future + Send + 'static>(
@@ -59,12 +53,14 @@ impl Spawner for tokio::runtime::Handle {
     }
 }
 
+#[cfg(feature = "tokio")]
 type GlobalSpawner = tokio::runtime::Handle;
 
 fn default_spawner() -> GlobalSpawner
 where
     GlobalSpawner: Spawner,
 {
+    #[cfg(feature = "tokio")]
     tokio::runtime::Handle::current()
 }
 
@@ -265,21 +261,49 @@ async fn printer_com_task(
 ) {
     tracing::debug!("Started background printer communications");
     let mut line = String::new();
+    enum Outcome {
+        Write(Option<Box<[u8]>>),
+        Read(Result<usize, std::io::Error>),
+    }
+    impl From<Option<Box<[u8]>>> for Outcome {
+        fn from(value: Option<Box<[u8]>>) -> Self {
+            Outcome::Write(value)
+        }
+    }
+    impl From<Result<usize, std::io::Error>> for Outcome {
+        fn from(value: Result<usize, std::io::Error>) -> Self {
+            Outcome::Read(value)
+        }
+    }
 
     loop {
-        tokio::select! {
-            Some(line) = gcoderx.recv() => {
-                if transport.write_all(&line).await.is_err() {return;}
-                if transport.flush().await.is_err() {return;}
-                tracing::debug!("Sent `{}` to printer", String::from_utf8_lossy(&line).trim());
-            },
-            Ok(1..) = transport.read_line(&mut line) => {
+        let written = async { gcoderx.recv().await.into() };
+        let readed = async { transport.read_line(&mut line).await.into() };
+        let next: Outcome = futures_lite::future::race(written, readed).await;
+        match next {
+            Outcome::Write(Some(bytes)) => {
+                if transport.write_all(&bytes).await.is_err() {
+                    return;
+                }
+                if transport.flush().await.is_err() {
+                    return;
+                }
+                tracing::debug!(
+                    "Sent `{}` to printer",
+                    String::from_utf8_lossy(&bytes).trim()
+                );
+            }
+            Outcome::Read(Ok(1..)) => {
                 tracing::debug!("Received `{line}` from printer");
                 line.push('\n');
                 let line: Arc<[u8]> = Arc::from(line.split_off(0).into_bytes());
-                if responsetx.send(line).is_err() {return;}
-            },
-            else => return,
+                if responsetx.send(line).is_err() {
+                    return;
+                }
+            }
+            _ => {
+                return;
+            }
         }
     }
 }
