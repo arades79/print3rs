@@ -6,7 +6,7 @@ use {
         sync::{Arc, Mutex},
         time::Duration,
     },
-    tokio::io::{AsyncRead, AsyncWrite},
+    tokio::io::{AsyncBufRead, AsyncWrite},
     tokio_serial::SerialStream,
 };
 
@@ -22,7 +22,8 @@ use tokio::{io::AsyncWriteExt, task::JoinHandle, time::timeout};
 use print3rs_core::{AsyncPrinterComm, Error as PrinterError, Printer};
 use tokio_serial::{available_ports, SerialPort, SerialPortBuilderExt, SerialPortInfo};
 
-type SerialPrinter = Printer<SerialStream>;
+type BufSerial = tokio::io::BufReader<SerialStream>;
+type SerialPrinter = Printer<BufSerial>;
 
 trait AutoConnect {
     type Transport;
@@ -30,8 +31,8 @@ trait AutoConnect {
 }
 
 impl AutoConnect for SerialPrinter {
-    type Transport = SerialStream;
-    async fn auto_connect() -> Printer<SerialStream> {
+    type Transport = tokio::io::BufReader<SerialStream>;
+    async fn auto_connect() -> SerialPrinter {
         async fn check_port(port: SerialPortInfo) -> Option<SerialPrinter> {
             tracing::debug!("checking port {}...", port.port_name);
             let mut printer_port = tokio_serial::new(port.port_name, 115200)
@@ -39,7 +40,7 @@ impl AutoConnect for SerialPrinter {
                 .open_native_async()
                 .ok()?;
             printer_port.write_data_terminal_ready(true).ok()?;
-            let mut printer = SerialPrinter::new(printer_port);
+            let mut printer = SerialPrinter::new(tokio::io::BufReader::new(printer_port));
 
             printer.send_raw(b"M115\n").ok()?;
             let look_for_ok = async {
@@ -431,7 +432,7 @@ pub fn start_print_file<Transport>(
     let task: JoinHandle<Result<(), TaskError>> = tokio::spawn(async move {
         if let Ok(file) = tokio::fs::read_to_string(filename).await {
             for line in file.lines() {
-                socket.send(line).await?.await?;
+                socket.send(line).await?.await;
             }
         }
         Ok(())
@@ -494,7 +495,7 @@ pub fn start_logging(
 pub fn start_repeat(gcodes: Vec<String>, socket: print3rs_core::Socket) -> BackgroundTask {
     let task: JoinHandle<Result<(), TaskError>> = tokio::spawn(async move {
         for ref line in gcodes.into_iter().cycle() {
-            socket.send(line).await?.await?;
+            socket.send(line).await?.await;
         }
         Ok(())
     });
@@ -593,11 +594,12 @@ impl<T> Default for Commander<T> {
 #[derive(Debug, Clone, Copy)]
 pub struct ConnectParams<'a>(&'a str, Option<u32>);
 
-impl<'a> TryFrom<ConnectParams<'a>> for SerialStream {
+impl<'a> TryFrom<ConnectParams<'a>> for BufSerial {
     type Error = tokio_serial::Error;
 
     fn try_from(value: ConnectParams<'a>) -> Result<Self, Self::Error> {
-        tokio_serial::new(value.0, value.1.unwrap_or(115200)).open_native_async()
+        let serial = tokio_serial::new(value.0, value.1.unwrap_or(115200)).open_native_async()?;
+        Ok(tokio::io::BufReader::new(serial))
     }
 }
 
@@ -626,7 +628,7 @@ impl<T> Commander<T> {
     }
 
     fn forward_broadcast(
-        mut in_channel: tokio::sync::broadcast::Receiver<bytes::Bytes>,
+        mut in_channel: tokio::sync::broadcast::Receiver<Arc<[u8]>>,
         out_channel: tokio::sync::broadcast::Sender<Response>,
     ) {
         tokio::spawn(async move {
@@ -649,7 +651,7 @@ impl<T> Commander<T> {
 
     pub fn background(mut self, mut commands: CommandReceiver) -> tokio::task::JoinHandle<()>
     where
-        T: Send + AsyncRead + AsyncWrite + Unpin + Debug + 'static,
+        T: Send + AsyncBufRead + AsyncWrite + Unpin + Debug + 'static,
         for<'a> T: TryFrom<ConnectParams<'a>>,
     {
         tokio::spawn(async move {
@@ -668,7 +670,7 @@ impl<T> Commander<T> {
         command: impl Into<Command<&'a str>>,
     ) -> Result<(), ErrorKindOf>
     where
-        T: AsyncRead + AsyncWrite + Unpin + Send + Debug + 'static + TryFrom<ConnectParams<'a>>,
+        T: AsyncBufRead + AsyncWrite + Unpin + Send + Debug + 'static + TryFrom<ConnectParams<'a>>,
     {
         let command = command.into();
         use Command::*;
