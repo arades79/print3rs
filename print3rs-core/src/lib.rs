@@ -11,7 +11,11 @@ pub use response::Response;
 use print3rs_rtcompat::{spawn, BackgroundTask, Task};
 use print3rs_serializer::{serialize_unsequenced, Sequenced};
 
-use futures_lite::prelude::*;
+#[cfg(feature = "tokio")]
+use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt};
+
+#[cfg(not(feature = "tokio"))]
+use futures_lite::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt};
 
 use tokio::sync::{broadcast, mpsc};
 
