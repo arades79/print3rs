@@ -19,7 +19,8 @@ use sealed::sealed;
 pub type LineStream = broadcast::Receiver<Arc<[u8]>>;
 
 trait Task: Future + Debug {
-    fn cancel(&mut self);
+    fn cancel(self);
+    fn detach(self);
 }
 
 trait Spawner {
@@ -35,16 +36,43 @@ trait Spawner {
 }
 
 #[cfg(feature = "tokio")]
-impl<T: Debug> Task for tokio::task::JoinHandle<T> {
-    fn cancel(&mut self) {
-        self.abort()
+#[derive(Debug)]
+struct AutoCloseJoinHandle<T>(tokio::task::JoinHandle<T>);
+
+#[cfg(feature = "tokio")]
+impl<T> Drop for AutoCloseJoinHandle<T> {
+    fn drop(&mut self) {
+        self.0.abort()
     }
+}
+
+#[cfg(feature = "tokio")]
+impl<T> Future for AutoCloseJoinHandle<T> {
+    type Output = <tokio::task::JoinHandle<T> as Future>::Output;
+
+    fn poll(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        self.0.poll(cx)
+    }
+}
+
+#[cfg(feature = "tokio")]
+impl<T: Debug> Task for AutoCloseJoinHandle<T> {
+    fn cancel(self) {
+        self.0.abort()
+    }
+    fn detach(self) {}
 }
 
 #[cfg(feature = "smol")]
 impl<T> Task for smol::Task<T> {
-    fn cancel(&mut self) {
-        core::mem::drop(x)
+    fn cancel(self) {
+        self.cancel()
+    }
+    fn detach(self) {
+        self.detach()
     }
 }
 
@@ -58,7 +86,7 @@ impl Spawner for tokio::runtime::Handle {
     where
         F::Output: Send + 'static + Debug,
     {
-        self.spawn(fut)
+        AutoCloseJoinHandle(self.spawn(fut))
     }
 }
 
@@ -82,12 +110,19 @@ type GlobalSpawner = tokio::runtime::Handle;
 #[cfg(all(feature = "smol", not(feature = "tokio")))]
 type GlobalSpawner = smol::Executor;
 
-fn default_spawner() -> GlobalSpawner
+fn spawn<F: Future + Send + 'static>(
+    fut: F,
+) -> impl Task<Output = <GlobalSpawner as Spawner>::Transform<F::Output>>
 where
     GlobalSpawner: Spawner,
+    F::Output: Send + 'static + Debug,
 {
     #[cfg(feature = "tokio")]
-    tokio::runtime::Handle::current()
+    {
+        static SPAWNER: std::sync::OnceLock<tokio::runtime::Handle> = std::sync::OnceLock::new();
+        let spawner = SPAWNER.get_or_init(tokio::runtime::Handle::current);
+        Spawner::spawn(spawner, fut)
+    }
 }
 
 #[sealed]
@@ -177,8 +212,7 @@ impl AsyncPrinterComm for Socket {
         let (sequence, bytes) = self.serializer.serialize(gcode);
         let sequenced_ok_watch = self.subscribe_lines().expect("Socket is always connected");
         send_slot.send(bytes);
-        let wait_for_response =
-            default_spawner().spawn(search_for_sequence(sequence, sequenced_ok_watch));
+        let wait_for_response = spawn(search_for_sequence(sequence, sequenced_ok_watch));
         Ok(wait_for_response)
     }
 
@@ -236,14 +270,6 @@ pub enum Printer<Transport> {
         com_task: Box<BackgroundTask<()>>,
         _transport: PhantomData<Transport>,
     },
-}
-
-impl<S> Drop for Printer<S> {
-    fn drop(&mut self) {
-        if let Self::Connected { com_task, .. } = self {
-            com_task.cancel()
-        }
-    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -336,7 +362,7 @@ impl<S> Printer<S> {
     {
         let (sender, gcoderx) = mpsc::channel::<Box<[u8]>>(8);
         let (response_sender, responses) = broadcast::channel(64);
-        let com_task = default_spawner().spawn(printer_com_task(port, gcoderx, response_sender));
+        let com_task = spawn(printer_com_task(port, gcoderx, response_sender));
         let com_task = Box::new(com_task);
         let serializer = Sequenced::default();
         Self::Connected {
