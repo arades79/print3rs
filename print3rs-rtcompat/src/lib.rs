@@ -98,7 +98,7 @@ type GlobalSpawner = smol::Executor;
 
 pub fn spawn<F: Future + Send + 'static>(
     fut: F,
-) -> impl Task<Output = <GlobalSpawner as Spawner>::Transform<F::Output>>
+) -> impl Task<Output = <GlobalSpawner as Spawner>::Transform<F::Output>> + Send
 where
     GlobalSpawner: Spawner,
     F::Output: Send + 'static + Debug,
@@ -111,4 +111,4 @@ where
     }
 }
 
-pub type BackgroundTask<T> = dyn Task<Output = <GlobalSpawner as Spawner>::Transform<T>>;
+pub type BackgroundTask<T> = dyn Task<Output = <GlobalSpawner as Spawner>::Transform<T>> + Send;
