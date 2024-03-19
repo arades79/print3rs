@@ -1,0 +1,14 @@
+[package]
+name = "print3rs-rtcompat"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[features]
+
+
+[dependencies]
+futures-lite = "2.3.0"
+smol = { version = "2.0.0", optional = true }
+tokio = { version = "1.36.0", features = ["rt"], optional = true }

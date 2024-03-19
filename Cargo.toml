@@ -7,6 +7,7 @@ members = [
     "print3rs-commands",
     "print3rs-lin3d",
     "print3rs-host3d",
+    "print3rs-rtcompat",
 ]
 resolver = "2"
 

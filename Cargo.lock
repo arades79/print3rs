@@ -2661,14 +2661,23 @@ name = "print3rs-core"
 version = "0.1.0"
 dependencies = [
  "futures-lite",
+ "print3rs-rtcompat",
  "print3rs-serializer",
  "sealed",
  "serde",
- "smol",
  "thiserror",
  "tokio",
  "tracing",
  "winnow 0.6.5",
+]
+
+[[package]]
+name = "print3rs-rtcompat"
+version = "0.1.0"
+dependencies = [
+ "futures-lite",
+ "smol",
+ "tokio",
 ]
 
 [[package]]
