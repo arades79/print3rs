@@ -545,8 +545,6 @@ impl From<SerialPrinter> for Response {
     }
 }
 
-use tokio::sync::{broadcast, mpsc};
-
 type CommandReceiver = mpsc::Receiver<Command<String>>;
 type ResponseSender = broadcast::Sender<Response>;
 type ResponseReceiver = broadcast::Receiver<Response>;
@@ -590,7 +588,7 @@ impl<'a> TryFrom<ConnectParams<'a>> for BufSerial {
 
 impl<T> Commander<T> {
     pub fn new() -> Self {
-        let (responder, _) = tokio::sync::broadcast::channel(32);
+        let (responder, _) = broadcast::channel(32);
         Self {
             printer: Default::default(),
             responder,
@@ -613,8 +611,8 @@ impl<T> Commander<T> {
     }
 
     fn forward_broadcast(
-        mut in_channel: tokio::sync::broadcast::Receiver<Arc<[u8]>>,
-        out_channel: tokio::sync::broadcast::Sender<Response>,
+        mut in_channel: broadcast::Receiver<Arc<[u8]>>,
+        out_channel: broadcast::Sender<Response>,
     ) -> Task<()> {
         spawn(async move {
             while let Ok(in_message) = in_channel.recv().await {

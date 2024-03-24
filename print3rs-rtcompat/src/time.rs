@@ -4,7 +4,7 @@ use tokio::time;
 #[cfg(feature = "smol")]
 use async_io::*;
 
-use futures_lite::Future;
+use core::future::Future;
 
 pub struct TimeoutError;
 

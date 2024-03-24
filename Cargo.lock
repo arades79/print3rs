@@ -2676,7 +2676,7 @@ dependencies = [
 name = "print3rs-rtcompat"
 version = "0.1.0"
 dependencies = [
- "futures-lite",
+ "async-broadcast",
  "smol",
  "tokio",
 ]
