@@ -318,6 +318,12 @@ impl<S> Printer<S> {
     }
 }
 
+impl<S> Drop for Printer<S> {
+    fn drop(&mut self) {
+        self.disconnect()
+    }
+}
+
 #[sealed]
 impl<S> AsyncPrinterComm for Printer<S> {
     async fn send(&self, gcode: impl Serialize + Debug) -> Result<impl BackgroundFuture, Error> {
