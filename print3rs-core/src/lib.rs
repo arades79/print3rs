@@ -8,14 +8,10 @@ mod response;
 use response::response;
 pub use response::Response;
 
-use print3rs_rtcompat::{spawn, BackgroundTask, Task};
+use print3rs_rtcompat::{
+    spawn, AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt, BackgroundFuture, Task,
+};
 use print3rs_serializer::{serialize_unsequenced, Sequenced};
-
-#[cfg(feature = "tokio")]
-use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt};
-
-#[cfg(not(feature = "tokio"))]
-use futures_lite::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt};
 
 use tokio::sync::{broadcast, mpsc};
 
@@ -34,7 +30,7 @@ pub trait AsyncPrinterComm {
     /// When called, a local task is spawned to check for a matching OK message.
     /// The handle to this task is returned after the first await on success.
     /// This allows simple synchronization of any sent command by awaiting twice.
-    async fn send(&self, gcode: impl Serialize + Debug) -> Result<impl Task, Error>;
+    async fn send(&self, gcode: impl Serialize + Debug) -> Result<impl BackgroundFuture, Error>;
 
     /// Serialize anything implementing Serialize and send the bytes to the printer
     ///
@@ -105,7 +101,7 @@ impl AsyncPrinterComm for Socket {
     /// The handle to this task is returned after the first await on success.
     /// This allows simple synchronization of any sent command by awaiting twice.
     #[tracing::instrument(level = "debug", skip(self))]
-    async fn send(&self, gcode: impl Serialize + Debug) -> Result<impl Task, Error> {
+    async fn send(&self, gcode: impl Serialize + Debug) -> Result<impl BackgroundFuture, Error> {
         let send_slot = self.sender.reserve().await?;
         let (sequence, bytes) = self.serializer.serialize(gcode);
         let sequenced_ok_watch = self.subscribe_lines().expect("Socket is always connected");
@@ -163,7 +159,7 @@ pub enum Printer<Transport> {
     Disconnected,
     Connected {
         socket: Socket,
-        com_task: Box<BackgroundTask<()>>,
+        com_task: Task<()>,
         _transport: PhantomData<Transport>,
     },
 }
@@ -259,7 +255,6 @@ impl<S> Printer<S> {
         let (sender, gcoderx) = mpsc::channel::<Box<[u8]>>(8);
         let (response_sender, responses) = broadcast::channel(64);
         let com_task = spawn(printer_com_task(port, gcoderx, response_sender));
-        let com_task = Box::new(com_task);
         let serializer = Sequenced::default();
         Self::Connected {
             socket: Socket {
@@ -298,7 +293,14 @@ impl<S> Printer<S> {
 
     /// Disconnect the printer and shutdown background communication
     pub fn disconnect(&mut self) {
-        core::mem::take(self);
+        if let Printer::Connected {
+            socket: _,
+            com_task,
+            _transport,
+        } = core::mem::take(self)
+        {
+            com_task.cancel()
+        }
     }
 
     pub fn is_connected(&self) -> bool {
@@ -308,17 +310,17 @@ impl<S> Printer<S> {
         }
     }
 
-    pub fn background_task(&self) -> Option<&BackgroundTask<()>> {
+    pub fn background_task(&self) -> Option<&Task<()>> {
         match self {
             Printer::Disconnected => None,
-            Printer::Connected { com_task, .. } => Some(com_task.as_ref()),
+            Printer::Connected { com_task, .. } => Some(com_task),
         }
     }
 }
 
 #[sealed]
 impl<S> AsyncPrinterComm for Printer<S> {
-    async fn send(&self, gcode: impl Serialize + Debug) -> Result<impl Task, Error> {
+    async fn send(&self, gcode: impl Serialize + Debug) -> Result<impl BackgroundFuture, Error> {
         let socket = self.socket()?;
         socket.send(gcode).await
     }

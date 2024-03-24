@@ -2647,6 +2647,7 @@ dependencies = [
  "bytes",
  "futures-util",
  "print3rs-core",
+ "print3rs-rtcompat",
  "print3rs-serializer",
  "thiserror",
  "tokio",
