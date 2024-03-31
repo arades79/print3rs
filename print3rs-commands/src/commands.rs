@@ -3,17 +3,19 @@ use {
     print3rs_core::Socket,
     std::{
         collections::HashMap,
+        default,
         fmt::Debug,
         sync::{Arc, Mutex},
         time::Duration,
     },
-    tokio::io::{AsyncWrite, BufReader},
+    tokio::io::BufReader,
     tokio_serial::SerialStream,
+    winnow::ascii::{alpha0, Caseless},
 };
 
 use winnow::{
     ascii::{alpha1, alphanumeric1, dec_uint, space0, space1},
-    combinator::{alt, dispatch, empty, fail, opt, preceded, rest, separated},
+    combinator::{alt, dispatch, empty, fail, opt, preceded, rest, separated, seq},
     prelude::*,
     token::take_till,
 };
@@ -159,8 +161,7 @@ macro        <name> <gcodes>  make an alias for a set of gcodes
 delmacro     <name>           remove an existing alias for set of gcodes
 macros                        list existing command aliases and contents           
 send         <gcodes>         explicitly send commands (split by ;) to printer exactly as typed
-connect      <path> <baud?>   connect to a specified serial device at baud (default: 115200)
-autoconnect                   attempt to find and connect to a printer
+connect      <proto?> <args?> connect to a device using protocol and args, or attempt to autoconnect
 disconnect                    disconnect from printer
 quit                          exit program
 \n";
@@ -177,8 +178,7 @@ pub fn help(command: impl AsRef<str>) -> &'static str {
         "log" => "log: begin logging the specified pattern from the printer into a csv with the `name` given. This operation runs in the background and is added as a task which can be stopped with `stop`. The pattern given will be used to parse the logs, with values wrapped in `{}` being given a column of whatever is between the `{}`, and pulling a number in its place. If your pattern needs to include a literal `{` or `}`, double them up like `{{` or `}}` to have the parser read it as just a `{` or `}` in the output.\n",
         "repeat" => "repeat: repeat the given Gcodes (separated by gcode comment character `;`) in a loop until stopped. \n",
         "stop" => "stop: stops a task running in the background. All background tasks are required to have a name, thus this command can be used to stop them. Tasks can also stop themselves if they fail or can complete, after which running this will do nothing.\n",
-        "connect" => "connect: Manually connect to a printer by specifying its path and optionally its baudrate. On windows this looks like `connect COM3 115200`, on linux more like `connect /dev/tty/ACM0 250000`. This does not test if the printer is capable of responding to messages, it will only open the port.\n",
-        "autoconnect" => "autoconnect: On some supported printer firmwares, this will automatically detect a connected printer and verify that it's capable of receiving and responding to commands. This is done with an `M115` command sent to the device, and waiting at most 5 seconds for an `ok` response. If your printer does not support this command, this will not work and you will need manual connection.\n",
+        "connect" => "connect: Manually connect to a printer by specifying a protocol and some arguments. Arguments depend on protocol. For serial connection specify its path and optionally its baudrate. On windows this looks like `connect serial COM3 115200`, on linux more like `connect serial /dev/tty/ACM0 250000`. This does not test if the printer is capable of responding to messages, it will only open the port. Specifying no arguments will attempt autoconnection using serial.\n",
         "disconnect" => "disconnect: disconnect from the currently connected printer. All active tasks will be stopped\n",
         "macro" => "create a case-insensitve alias to some set of gcodes, even containing other macros recursively to build up complex sets of builds with a single word. Macro names cannot start with G,T,M,N, or D to avoid conflict with Gcodes, and cannot have any non-alphanumeric characters. commands in a macro are separated by ';', and macros can be used anywhere Gcodes are passed, including repeat commands and sends.\n",
         _ => FULL_HELP,
@@ -186,6 +186,132 @@ pub fn help(command: impl AsRef<str>) -> &'static str {
 }
 
 use crate::logging::parsing::{parse_logger, Segment};
+
+#[non_exhaustive]
+#[derive(Debug, Default, Clone)]
+pub enum Connection<S> {
+    #[default]
+    Auto,
+    Serial {
+        port: S,
+        baud: Option<u32>,
+    },
+    Tcp {
+        hostname: S,
+        port: Option<u16>,
+    },
+    Mqtt {
+        hostname: S,
+        port: Option<u16>,
+        in_topic: Option<S>,
+        out_topic: Option<S>,
+    },
+}
+
+impl<S> Connection<S> {
+    fn into_owned(self) -> Connection<<S as ToOwned>::Owned>
+    where
+        S: ToOwned,
+    {
+        match self {
+            Connection::Auto => Connection::Auto,
+            Connection::Serial { port, baud } => Connection::Serial {
+                port: port.to_owned(),
+                baud,
+            },
+            Connection::Tcp { hostname, port } => Connection::Tcp {
+                hostname: hostname.to_owned(),
+                port,
+            },
+            Connection::Mqtt {
+                hostname,
+                port,
+                in_topic,
+                out_topic,
+            } => Connection::Mqtt {
+                hostname: hostname.to_owned(),
+                port,
+                in_topic: in_topic.map(|s| s.to_owned()),
+                out_topic: out_topic.map(|s| s.to_owned()),
+            },
+        }
+    }
+    fn to_borrowed<Borrowed: ?Sized>(&self) -> Connection<&Borrowed>
+    where
+        S: Borrow<Borrowed>,
+    {
+        match self {
+            Connection::Auto => Connection::Auto,
+            Connection::Serial { port, baud } => Connection::Serial {
+                port: port.borrow(),
+                baud: baud.clone(),
+            },
+            Connection::Tcp { hostname, port } => Connection::Tcp {
+                hostname: hostname.borrow(),
+                port: port.clone(),
+            },
+            Connection::Mqtt {
+                hostname,
+                port,
+                in_topic,
+                out_topic,
+            } => Connection::Mqtt {
+                hostname: hostname.borrow(),
+                port: port.clone(),
+                in_topic: in_topic.map(|s| s.borrow()),
+                out_topic: out_topic.map(|s| s.borrow()),
+            },
+        }
+    }
+}
+
+fn parse_serial_connection<'a>(input: &mut &'a str) -> PResult<Connection<&'a str>> {
+    let (port, baud) = (
+        preceded(space0, take_till(1.., ' ')),
+        preceded(space1, opt(dec_uint)),
+    )
+        .parse_next(input)?;
+    Ok(Connection::Serial { port, baud })
+}
+
+fn parse_tcp_connection<'a>(input: &mut &'a str) -> PResult<Connection<&'a str>> {
+    let (hostname, port) = (
+        preceded(space0, take_till(1.., ' ')),
+        preceded(space1, opt(dec_uint)),
+    )
+        .parse_next(input)?;
+    Ok(Connection::Tcp { hostname, port })
+}
+
+fn parse_mqtt_connection<'a>(input: &mut &'a str) -> PResult<Connection<&'a str>> {
+    let (hostname, port) = (
+        preceded(space0, take_till(1.., ' ')),
+        preceded(space1, opt(dec_uint)),
+    )
+        .parse_next(input)?;
+    let (in_topic, out_topic) = (
+        preceded(space0, opt(take_till(1.., ' '))),
+        preceded(space0, opt(take_till(1.., ' '))),
+    )
+        .parse_next(input)?;
+    Ok(Connection::Mqtt {
+        hostname,
+        port,
+        in_topic,
+        out_topic,
+    })
+}
+
+fn parse_connection<'a>(input: &mut &'a str) -> PResult<Command<&'a str>> {
+    let connection = dispatch! { preceded(space0, alpha1);
+        "serial" => parse_serial_connection,
+        "tcp" | "ip" => parse_tcp_connection,
+        "mqtt" => parse_mqtt_connection,
+        _ => empty.map(|_| Connection::Auto),
+    }
+    .parse_next(input)?;
+    Ok(Command::Connect(connection))
+}
 
 #[non_exhaustive]
 #[derive(Debug, Clone)]
@@ -196,8 +322,7 @@ pub enum Command<S> {
     Repeat(S, Vec<S>),
     Tasks,
     Stop(S),
-    Connect(S, Option<u32>),
-    AutoConnect,
+    Connect(Connection<S>),
     Disconnect,
     Macro(S, Vec<S>),
     Macros,
@@ -209,14 +334,20 @@ pub enum Command<S> {
     Unrecognized,
 }
 
-impl<'a, S: ToOwned + ?Sized> Command<&'a S> {
+impl<S> Command<S> {
     pub fn into_owned(self) -> Command<S::Owned>
     where
-        Segment<S::Owned>: From<Segment<&'a S>>,
+        S: ToOwned,
+        Segment<S::Owned>: From<Segment<S>>,
     {
         use Command::*;
         match self {
-            Gcodes(codes) => Gcodes(codes.into_iter().map(ToOwned::to_owned).collect()),
+            Gcodes(codes) => Gcodes(
+                codes
+                    .into_iter()
+                    .map(|arg0: S| ToOwned::to_owned(&arg0))
+                    .collect(),
+            ),
             Print(filename) => Print(filename.to_owned()),
             Log(name, pattern) => Log(
                 name.to_owned(),
@@ -224,16 +355,21 @@ impl<'a, S: ToOwned + ?Sized> Command<&'a S> {
             ),
             Repeat(name, codes) => Repeat(
                 name.to_owned(),
-                codes.into_iter().map(ToOwned::to_owned).collect(),
+                codes
+                    .into_iter()
+                    .map(|arg0: S| ToOwned::to_owned(&arg0))
+                    .collect(),
             ),
             Tasks => Tasks,
             Stop(s) => Stop(s.to_owned()),
-            Connect(path, baud) => Connect(path.to_owned(), baud),
-            AutoConnect => AutoConnect,
+            Connect(connection) => Connect(connection.into_owned()),
             Disconnect => Disconnect,
             Macro(name, codes) => Macro(
                 name.to_owned(),
-                codes.into_iter().map(ToOwned::to_owned).collect(),
+                codes
+                    .into_iter()
+                    .map(|arg0: S| ToOwned::to_owned(&arg0))
+                    .collect(),
             ),
             Macros => Macros,
             DeleteMacro(s) => DeleteMacro(s.to_owned()),
@@ -244,33 +380,32 @@ impl<'a, S: ToOwned + ?Sized> Command<&'a S> {
             Unrecognized => Unrecognized,
         }
     }
-    pub fn into_box(self) -> Command<Box<S>>
-    where
-        Box<S>: From<&'a S>,
-    {
-        use Command::*;
-        match self {
-            Gcodes(codes) => Gcodes(codes.into_iter().map(|s| s.into()).collect()),
-            Print(filename) => Print(filename.into()),
-            Log(name, pattern) => Log(name.into(), pattern.into_iter().map(|s| s.into()).collect()),
-            Repeat(name, codes) => {
-                Repeat(name.into(), codes.into_iter().map(|s| s.into()).collect())
-            }
-            Tasks => Tasks,
-            Stop(s) => Stop(s.into()),
-            Connect(path, baud) => Connect(path.into(), baud),
-            AutoConnect => AutoConnect,
-            Disconnect => Disconnect,
-            Macro(name, codes) => Macro(name.into(), codes.into_iter().map(|s| s.into()).collect()),
-            Macros => Macros,
-            DeleteMacro(s) => DeleteMacro(s.into()),
-            Help(s) => Help(s.into()),
-            Version => Version,
-            Clear => Clear,
-            Quit => Quit,
-            Unrecognized => Unrecognized,
-        }
-    }
+    // pub fn into_box(self) -> Command<Box<S>>
+    // where
+    //     Box<S>: From<S>,
+    // {
+    //     use Command::*;
+    //     match self {
+    //         Gcodes(codes) => Gcodes(codes.into_iter().map(|s| s.into()).collect()),
+    //         Print(filename) => Print(filename.into()),
+    //         Log(name, pattern) => Log(name.into(), pattern.into_iter().map(|s| s.into()).collect()),
+    //         Repeat(name, codes) => {
+    //             Repeat(name.into(), codes.into_iter().map(|s| s.into()).collect())
+    //         }
+    //         Tasks => Tasks,
+    //         Stop(s) => Stop(s.into()),
+    //         Connect(connection) => Connect(connection.into_owned()),
+    //         Disconnect => Disconnect,
+    //         Macro(name, codes) => Macro(name.into(), codes.into_iter().map(|s| s.into()).collect()),
+    //         Macros => Macros,
+    //         DeleteMacro(s) => DeleteMacro(s.into()),
+    //         Help(s) => Help(s.into()),
+    //         Version => Version,
+    //         Clear => Clear,
+    //         Quit => Quit,
+    //         Unrecognized => Unrecognized,
+    //     }
+    // }
 }
 
 impl<S> Command<S> {
@@ -292,8 +427,7 @@ impl<S> Command<S> {
             }
             Tasks => Tasks,
             Stop(s) => Stop(s.borrow()),
-            Connect(path, baud) => Connect(path.borrow(), *baud),
-            AutoConnect => AutoConnect,
+            Connect(connection) => Connect(connection.to_borrowed()),
             Disconnect => Disconnect,
             Macro(name, codes) => Macro(name.borrow(), codes.iter().map(|s| s.borrow()).collect()),
             Macros => Macros,
@@ -309,7 +443,7 @@ impl<S> Command<S> {
 
 impl<'a> From<Command<&'a str>> for Command<String> {
     fn from(command: Command<&'a str>) -> Self {
-        command.into_owned()
+        command.into_owned().into()
     }
 }
 
@@ -325,8 +459,7 @@ impl<'a> From<&'a Command<String>> for Command<&'a str> {
             }
             Tasks => Tasks,
             Stop(s) => Stop(s.as_str()),
-            Connect(path, baud) => Connect(path.as_str(), *baud),
-            AutoConnect => AutoConnect,
+            Connect(connection) => Connect(connection.to_borrowed()),
             Disconnect => Disconnect,
             Macro(name, codes) => Macro(name.as_str(), codes.iter().map(|s| s.as_str()).collect()),
             Macros => Macros,
@@ -366,7 +499,7 @@ fn parse_macro<'a>(input: &mut &'a str) -> PResult<Command<&'a str>> {
 
 fn inner_command<'a>(input: &mut &'a str) -> PResult<Command<&'a str>> {
     let explicit = opt(":").parse_next(input)?;
-    let command = opt(dispatch! {alpha1;
+    let command = opt(dispatch! {preceded(space0, alpha1);
         "log" => parse_logger,
         "repeat" => parse_repeater,
         "print" => preceded(space0, rest).map(Command::Print),
@@ -374,9 +507,8 @@ fn inner_command<'a>(input: &mut &'a str) -> PResult<Command<&'a str>> {
         "stop" => preceded(space0, rest).map(Command::Stop),
         "help" => rest.map(Command::Help),
         "version" => empty.map(|_| Command::Version),
-        "autoconnect" => empty.map(|_| Command::AutoConnect),
         "disconnect" => empty.map(|_| Command::Disconnect),
-        "connect" => (preceded(space0, take_till(1.., [' '])), preceded(space0,opt(dec_uint))).map(|(path, baud)| Command::Connect(path, baud)),
+        "connect" => parse_connection,
         "macro" => parse_macro,
         "macros" => empty.map(|_| Command::Macros),
         "delmacro" => preceded(space0, rest).map(Command::DeleteMacro),
@@ -575,14 +707,14 @@ impl Default for Commander {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct ConnectParams<'a>(&'a str, Option<u32>);
-
-impl<'a> TryFrom<ConnectParams<'a>> for BufReader<SerialStream> {
+impl<'a> TryFrom<Connection<&'a str>> for BufReader<SerialStream> {
     type Error = tokio_serial::Error;
 
-    fn try_from(value: ConnectParams<'a>) -> Result<Self, Self::Error> {
-        let stream = tokio_serial::new(value.0, value.1.unwrap_or(115200)).open_native_async()?;
+    fn try_from(value: Connection<&'a str>) -> Result<Self, Self::Error> {
+        let Connection::Serial { port, baud } = value else {
+            todo!()
+        };
+        let stream = tokio_serial::new(port, baud.unwrap_or(115200)).open_native_async()?;
         Ok(BufReader::new(stream))
     }
 }
@@ -716,8 +848,8 @@ impl Commander {
             DeleteMacro(name) => {
                 self.macros.remove(name);
             }
-            Connect(path, baud) => {
-                if let Ok(port) = ConnectParams(path, baud).try_into() {
+            Connect(connection) => {
+                if let Ok(port) = connection.try_into() {
                     self.tasks.clear();
                     self.printer.connect::<BufReader<SerialStream>>(port);
                     self.add_printer_output_to_responses();
@@ -726,25 +858,25 @@ impl Commander {
                         .send(Response::Error("Connection failed.\n".into()))?;
                 }
             }
-            AutoConnect => {
-                self.tasks.clear();
-                self.responder.send("Connecting...\n".into())?;
-                let autoconnect_responder = self.responder.clone();
-                tokio::spawn(async move {
-                    let printer = auto_connect().await;
-                    let response = if printer.is_connected() {
-                        Response::Output("Found Printer!\n".into())
-                    } else {
-                        Response::Error("No printer found.\n".into())
-                    };
-                    if let Ok(printer_responses) = printer.subscribe_lines() {
-                        let forward_responder = autoconnect_responder.clone();
-                        Self::forward_broadcast(printer_responses, forward_responder);
-                    }
-                    let _ = autoconnect_responder.send(printer.into());
-                    let _ = autoconnect_responder.send(response);
-                });
-            }
+            // AutoConnect => {
+            //     self.tasks.clear();
+            //     self.responder.send("Connecting...\n".into())?;
+            //     let autoconnect_responder = self.responder.clone();
+            //     tokio::spawn(async move {
+            //         let printer = auto_connect().await;
+            //         let response = if printer.is_connected() {
+            //             Response::Output("Found Printer!\n".into())
+            //         } else {
+            //             Response::Error("No printer found.\n".into())
+            //         };
+            //         if let Ok(printer_responses) = printer.subscribe_lines() {
+            //             let forward_responder = autoconnect_responder.clone();
+            //             Self::forward_broadcast(printer_responses, forward_responder);
+            //         }
+            //         let _ = autoconnect_responder.send(printer.into());
+            //         let _ = autoconnect_responder.send(response);
+            //     });
+            // }
             Disconnect => {
                 self.tasks.clear();
                 self.printer.disconnect()
