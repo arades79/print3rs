@@ -849,34 +849,46 @@ impl Commander {
                 self.macros.remove(name);
             }
             Connect(connection) => {
-                if let Ok(port) = connection.try_into() {
-                    self.tasks.clear();
-                    self.printer.connect::<BufReader<SerialStream>>(port);
-                    self.add_printer_output_to_responses();
-                } else {
-                    self.responder
-                        .send(Response::Error("Connection failed.\n".into()))?;
-                }
+                self.tasks.clear();
+                match connection {
+                    Connection::Auto => {
+                        self.tasks.clear();
+                        self.responder.send("Connecting...\n".into())?;
+                        let autoconnect_responder = self.responder.clone();
+                        tokio::spawn(async move {
+                            let printer = auto_connect().await;
+                            let response = if printer.is_connected() {
+                                Response::Output("Found Printer!\n".into())
+                            } else {
+                                Response::Error("No printer found.\n".into())
+                            };
+                            if let Ok(printer_responses) = printer.subscribe_lines() {
+                                let forward_responder = autoconnect_responder.clone();
+                                Self::forward_broadcast(printer_responses, forward_responder);
+                            }
+                            let _ = autoconnect_responder.send(printer.into());
+                            let _ = autoconnect_responder.send(response);
+                        });
+                    }
+                    Connection::Serial { .. } => {
+                        if let Ok(port) = connection.try_into() {
+                            self.tasks.clear();
+                            self.printer.connect::<BufReader<SerialStream>>(port);
+                            self.add_printer_output_to_responses();
+                        } else {
+                            self.responder
+                                .send(Response::Error("Connection failed.\n".into()))?;
+                        };
+                    }
+                    Connection::Tcp { hostname, port } => todo!(),
+                    Connection::Mqtt {
+                        hostname,
+                        port,
+                        in_topic,
+                        out_topic,
+                    } => todo!(),
+                };
             }
-            // AutoConnect => {
-            //     self.tasks.clear();
-            //     self.responder.send("Connecting...\n".into())?;
-            //     let autoconnect_responder = self.responder.clone();
-            //     tokio::spawn(async move {
-            //         let printer = auto_connect().await;
-            //         let response = if printer.is_connected() {
-            //             Response::Output("Found Printer!\n".into())
-            //         } else {
-            //             Response::Error("No printer found.\n".into())
-            //         };
-            //         if let Ok(printer_responses) = printer.subscribe_lines() {
-            //             let forward_responder = autoconnect_responder.clone();
-            //             Self::forward_broadcast(printer_responses, forward_responder);
-            //         }
-            //         let _ = autoconnect_responder.send(printer.into());
-            //         let _ = autoconnect_responder.send(response);
-            //     });
-            // }
             Disconnect => {
                 self.tasks.clear();
                 self.printer.disconnect()
