@@ -294,3 +294,12 @@ impl Printer {
         self.socket().ok_or(Error::Disconnected)?.subscribe_lines()
     }
 }
+
+impl From<Option<Printer>> for Printer {
+    fn from(value: Option<Printer>) -> Self {
+        match value {
+            Some(printer) => printer,
+            None => Printer::Disconnected,
+        }
+    }
+}
