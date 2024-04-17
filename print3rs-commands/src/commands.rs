@@ -244,11 +244,11 @@ impl<S> Connection<S> {
             Connection::Auto => Connection::Auto,
             Connection::Serial { port, baud } => Connection::Serial {
                 port: port.borrow(),
-                baud: baud.clone(),
+                baud: *baud,
             },
             Connection::Tcp { hostname, port } => Connection::Tcp {
                 hostname: hostname.borrow(),
-                port: port.clone(),
+                port: *port,
             },
             Connection::Mqtt {
                 hostname,
@@ -257,9 +257,9 @@ impl<S> Connection<S> {
                 out_topic,
             } => Connection::Mqtt {
                 hostname: hostname.borrow(),
-                port: port.clone(),
-                in_topic: in_topic.map(|s| s.borrow()),
-                out_topic: out_topic.map(|s| s.borrow()),
+                port: *port,
+                in_topic: in_topic.as_ref().map(|s| s.borrow()),
+                out_topic: out_topic.as_ref().map(|s| s.borrow()),
             },
         }
     }
@@ -303,7 +303,7 @@ fn parse_mqtt_connection<'a>(input: &mut &'a str) -> PResult<Connection<&'a str>
 }
 
 fn parse_connection<'a>(input: &mut &'a str) -> PResult<Command<&'a str>> {
-    let connection = dispatch! { preceded(space0, alpha1);
+    let connection = dispatch! { preceded(space0, alpha0);
         "serial" => parse_serial_connection,
         "tcp" | "ip" => parse_tcp_connection,
         "mqtt" => parse_mqtt_connection,
