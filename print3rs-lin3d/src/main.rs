@@ -5,7 +5,6 @@
 use {
     print3rs_core::Printer,
     std::{fmt::Debug, sync::Arc},
-    tokio_serial::SerialStream,
 };
 
 use futures_util::AsyncWriteExt;
@@ -27,7 +26,7 @@ enum AppError {
     Writer(#[from] futures_util::io::Error),
 }
 
-fn prompt_string(printer: &Printer<SerialStream>) -> String {
+fn prompt_string(printer: &Printer) -> String {
     let status = match printer {
         print3rs_core::Printer::Disconnected => "Disconnected",
         print3rs_core::Printer::Connected { .. } => "Connected",
