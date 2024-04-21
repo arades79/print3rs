@@ -1,5 +1,6 @@
 use {
     core::borrow::Borrow,
+    futures_util::{Future, TryFutureExt},
     print3rs_core::Socket,
     std::{
         collections::HashMap,
@@ -635,14 +636,17 @@ impl Drop for BackgroundTask {
     }
 }
 
-pub fn send_gcodes(
-    printer: &Printer,
-    codes: impl IntoIterator<Item = impl AsRef<str>>,
-) -> Result<(), PrinterError> {
-    for code in codes {
-        printer.send_unsequenced(code.as_ref())?;
+pub fn send_gcodes(socket: Socket, codes: Vec<String>) -> BackgroundTask {
+    let task: JoinHandle<Result<(), PrinterError>> = tokio::spawn(async move {
+        for code in codes {
+            socket.send_unsequenced(code.as_str()).await?.await?;
+        }
+        Ok(())
+    });
+    BackgroundTask {
+        description: "gcodes",
+        abort_handle: task.abort_handle(),
     }
-    Ok(())
 }
 
 #[derive(Debug, Clone)]
@@ -788,10 +792,18 @@ impl Commander {
                 self.responder.send(Response::Quit)?;
             }
             Gcodes(codes) => {
+                let socket = self.printer().socket().ok_or(PrinterError::Disconnected)?;
                 let codes = self.macros.expand(codes);
-                if let Err(_e) = send_gcodes(&self.printer, codes) {
-                    self.responder.send(DISCONNECTED_ERROR.into())?;
-                }
+                let task = send_gcodes(socket.clone(), codes);
+                static COUNTER: std::sync::atomic::AtomicUsize =
+                    std::sync::atomic::AtomicUsize::new(0);
+                self.tasks.insert(
+                    format!(
+                        "gcodes_{}",
+                        COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                    ),
+                    task,
+                );
             }
             Print(filename) => {
                 if let Ok(print) = start_print_file(filename, &self.printer) {
