@@ -1,17 +1,15 @@
 use {
     core::borrow::Borrow,
-    futures_util::{Future, TryFutureExt},
     print3rs_core::Socket,
     std::{
         collections::HashMap,
-        default,
         fmt::Debug,
         sync::{Arc, Mutex},
         time::Duration,
     },
     tokio::io::BufReader,
     tokio_serial::SerialStream,
-    winnow::ascii::{alpha0, Caseless},
+    winnow::ascii::alpha0,
 };
 
 use winnow::{
@@ -381,32 +379,6 @@ impl<S> Command<S> {
             Unrecognized => Unrecognized,
         }
     }
-    // pub fn into_box(self) -> Command<Box<S>>
-    // where
-    //     Box<S>: From<S>,
-    // {
-    //     use Command::*;
-    //     match self {
-    //         Gcodes(codes) => Gcodes(codes.into_iter().map(|s| s.into()).collect()),
-    //         Print(filename) => Print(filename.into()),
-    //         Log(name, pattern) => Log(name.into(), pattern.into_iter().map(|s| s.into()).collect()),
-    //         Repeat(name, codes) => {
-    //             Repeat(name.into(), codes.into_iter().map(|s| s.into()).collect())
-    //         }
-    //         Tasks => Tasks,
-    //         Stop(s) => Stop(s.into()),
-    //         Connect(connection) => Connect(connection.into_owned()),
-    //         Disconnect => Disconnect,
-    //         Macro(name, codes) => Macro(name.into(), codes.into_iter().map(|s| s.into()).collect()),
-    //         Macros => Macros,
-    //         DeleteMacro(s) => DeleteMacro(s.into()),
-    //         Help(s) => Help(s.into()),
-    //         Version => Version,
-    //         Clear => Clear,
-    //         Quit => Quit,
-    //         Unrecognized => Unrecognized,
-    //     }
-    // }
 }
 
 impl<S> Command<S> {
