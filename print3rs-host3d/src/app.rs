@@ -14,7 +14,6 @@ use {
 use iced::widget::combo_box::State as ComboState;
 use iced::Command;
 
-use print3rs_core::AsyncPrinterComm;
 use tokio_serial::available_ports;
 use tokio_stream::wrappers::BroadcastStream;
 
@@ -118,15 +117,19 @@ impl iced::Application for App {
                     self.commander.set_printer(Printer::Disconnected);
                 } else if let Some(ref port) = self.selected_port {
                     if port == "auto" {
-                        if let Err(msg) = self
-                            .commander
-                            .dispatch(print3rs_commands::commands::Command::AutoConnect)
+                        if let Err(msg) =
+                            self.commander
+                                .dispatch(print3rs_commands::commands::Command::Connect(
+                                    print3rs_commands::commands::Connection::Auto,
+                                ))
                         {
                             self.error_messages.push(msg.0);
                         }
                     } else if let Err(msg) = self.commander.dispatch(commands::Command::Connect(
-                        port.as_str(),
-                        self.selected_baud,
+                        commands::Connection::Serial {
+                            port: port.as_str(),
+                            baud: self.selected_baud,
+                        },
                     )) {
                         self.error_messages.push(msg.0);
                     }
