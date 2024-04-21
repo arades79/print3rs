@@ -181,16 +181,31 @@ async fn printer_com_task(
                 if transport.flush().await.is_err() {return;}
                 tracing::debug!("Sent `{}` to printer", String::from_utf8_lossy(&line).trim());
                 if let Some(responder) = responder {
-                    pending_responses.insert(sequence, responder);
+                    // dropping anything in slot, gives WontRespond error
+                    pending_responses.insert(sequence, (responder, line));
                 }
             },
             Ok(1..) = transport.read_line(&mut buf) => {
                 tracing::debug!("Received `{buf}` from printer");
                 if let Ok(ok_res) = response.parse(buf.as_bytes()) {
                     match ok_res {
-                        Response::Ok => {if let Some(responder) = pending_responses.remove(&None){ responder.send(());}},
-                        Response::SequencedOk(seq) => {if let Some(responder) = pending_responses.remove(&Some(seq)){ responder.send(());}},
-                        Response::Resend(_) => todo!(),
+                        Response::Ok => {
+                            if let Some((responder, _)) = pending_responses.remove(&None){
+                                 let _ = responder.send(());
+                            }
+                        },
+                        Response::SequencedOk(seq) => {
+                            if let Some((responder, _)) = pending_responses.remove(&Some(seq)){
+                                let _ = responder.send(());
+                            }
+                        },
+                        Response::Resend(seq) => {
+                            if let Some((_, ref line)) = pending_responses.get(&Some(seq)) {
+                                if transport.write_all(line).await.is_err() {return;}
+                                if transport.flush().await.is_err() {return;}
+                                tracing::debug!("Resent `{}` to printer", String::from_utf8_lossy(line).trim());
+                            }
+                        },
                     }
                 }
                 if responsetx.send(Arc::from(buf.split_off(0))).is_err() {return;}
