@@ -5,7 +5,6 @@ use {
         path::PathBuf,
         sync::{Arc, Mutex},
     },
-    tokio_serial::SerialStream,
 };
 
 #[derive(Debug, Clone, Default)]
@@ -51,7 +50,7 @@ pub(crate) enum Message {
     SaveDialog,
     SaveConsole(PathBuf),
     ConsoleAppend(String),
-    AutoConnectComplete(Arc<Mutex<Printer<SerialStream>>>),
+    AutoConnectComplete(Arc<Mutex<Printer>>),
     PushError(String),
     DismissError,
     OutputAction(iced::widget::text_editor::Action),
@@ -62,7 +61,7 @@ pub(crate) enum Message {
 impl From<Response> for Message {
     fn from(value: Response) -> Self {
         match value {
-            Response::Output(s) => Message::ConsoleAppend(s),
+            Response::Output(s) => Message::ConsoleAppend(s.to_string()),
             Response::Error(e) => Message::PushError(e.0),
             Response::AutoConnect(a) => Message::AutoConnectComplete(a),
             Response::Clear => Message::ClearConsole,
