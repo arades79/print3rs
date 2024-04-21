@@ -1,4 +1,4 @@
-use std::{fmt::Debug, sync::Arc};
+use std::{collections::BTreeMap, fmt::Debug, future::Future, sync::Arc};
 
 use serde::Serialize;
 use winnow::Parser;
@@ -12,11 +12,14 @@ use print3rs_serializer::{serialize_unsequenced, Sequenced};
 
 use tokio::{
     io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt},
-    sync::{broadcast, mpsc},
+    sync::{broadcast, mpsc, oneshot},
     task::JoinHandle,
 };
 
 pub type LineStream = broadcast::Receiver<Arc<str>>;
+
+#[derive(Debug)]
+struct SendContent(Box<[u8]>, Option<i32>, Option<oneshot::Sender<()>>);
 
 pub async fn search_for_sequence(sequence: i32, mut responses: LineStream) -> Response {
     tracing::debug!("Started looking for Ok {sequence}");
@@ -38,7 +41,7 @@ pub async fn search_for_sequence(sequence: i32, mut responses: LineStream) -> Re
 
 #[derive(Debug)]
 pub struct Socket {
-    sender: mpsc::Sender<Box<[u8]>>,
+    sender: mpsc::Sender<SendContent>,
     serializer: Sequenced,
     pub responses: broadcast::Receiver<Arc<str>>,
 }
@@ -66,14 +69,13 @@ impl Socket {
     pub async fn send(
         &self,
         gcode: impl Serialize + Debug,
-    ) -> Result<tokio::task::JoinHandle<Response>, Error> {
+    ) -> Result<impl Future<Output = Result<(), Error>>, Error> {
         let send_slot = self.sender.reserve().await?;
         let (sequence, bytes) = self.serializer.serialize(gcode);
-        let sequenced_ok_watch = self.subscribe_lines().expect("Socket is always connected");
-        send_slot.send(bytes);
-        let wait_for_response =
-            tokio::task::spawn(search_for_sequence(sequence, sequenced_ok_watch));
-        Ok(wait_for_response)
+        let (responder, response) = oneshot::channel();
+        send_slot.send(SendContent(bytes, Some(sequence), Some(responder)));
+        let response = async { response.await.map_err(|e| e.into()) };
+        Ok(response)
     }
 
     /// Serialize anything implementing Serialize and send the bytes to the printer
@@ -83,15 +85,22 @@ impl Socket {
     ///
     /// If your printer supports it, the sequenced `send` function is preferred,
     /// although this version is slightly lower overhead.
-    pub fn send_unsequenced(&self, gcode: impl Serialize + Debug) -> Result<(), Error> {
+    pub fn send_unsequenced(
+        &self,
+        gcode: impl Serialize + Debug,
+    ) -> Result<impl Future<Output = Result<(), Error>>, Error> {
         let bytes = serialize_unsequenced(gcode);
-        self.sender.try_send(bytes)?;
-        Ok(())
+        let (responder, response) = oneshot::channel();
+        self.sender
+            .try_send(SendContent(bytes, None, Some(responder)))?;
+        let response = async { response.await.map_err(|e| e.into()) };
+        Ok(response)
     }
 
     /// Send any raw sequence of bytes to the printer
     pub fn send_raw(&self, gcode: &[u8]) -> Result<(), Error> {
-        self.sender.try_send(gcode.to_owned().into_boxed_slice())?;
+        self.sender
+            .try_send(SendContent(gcode.to_owned().into_boxed_slice(), None, None))?;
         Ok(())
     }
 
@@ -144,32 +153,46 @@ pub enum Error {
     ResponseSender(#[from] broadcast::error::SendError<Arc<str>>),
 
     #[error("Send queue full or closed")]
-    Sender(#[from] mpsc::error::TrySendError<Box<[u8]>>),
+    Sender(#[from] mpsc::error::TrySendError<SendContent>),
 
     #[error("Couldn't reserve a slot to send message")]
     SendReserve(#[from] mpsc::error::SendError<()>),
 
     #[error("Underlying printer connection was closed")]
     Disconnected,
+
+    #[error("Background task stopped before command finished processing")]
+    WontRespond(#[from] oneshot::error::RecvError),
 }
 
 /// Loop for handling sending/receiving in the background with possible split senders/receivers
 async fn printer_com_task(
     mut transport: impl AsyncBufRead + AsyncWrite + Unpin,
-    mut gcoderx: mpsc::Receiver<Box<[u8]>>,
+    mut gcoderx: mpsc::Receiver<SendContent>,
     responsetx: broadcast::Sender<Arc<str>>,
 ) {
     tracing::debug!("Started background printer communications");
     let mut buf = String::new();
+    let mut pending_responses = BTreeMap::new();
     loop {
         tokio::select! {
-            Some(line) = gcoderx.recv() => {
+            Some(SendContent(line, sequence, responder)) = gcoderx.recv(), if pending_responses.len() < 4 => {
                 if transport.write_all(&line).await.is_err() {return;}
                 if transport.flush().await.is_err() {return;}
                 tracing::debug!("Sent `{}` to printer", String::from_utf8_lossy(&line).trim());
+                if let Some(responder) = responder {
+                    pending_responses.insert(sequence, responder);
+                }
             },
             Ok(1..) = transport.read_line(&mut buf) => {
                 tracing::debug!("Received `{buf}` from printer");
+                if let Ok(ok_res) = response.parse(buf.as_bytes()) {
+                    match ok_res {
+                        Response::Ok => {if let Some(responder) = pending_responses.remove(&None){ responder.send(());}},
+                        Response::SequencedOk(seq) => {if let Some(responder) = pending_responses.remove(&Some(seq)){ responder.send(());}},
+                        Response::Resend(_) => todo!(),
+                    }
+                }
                 if responsetx.send(Arc::from(buf.split_off(0))).is_err() {return;}
             },
             else => return,
@@ -186,7 +209,7 @@ impl Printer {
     where
         S: AsyncBufRead + AsyncWrite + Unpin + Send + 'static + Debug,
     {
-        let (sender, gcoderx) = mpsc::channel::<Box<[u8]>>(8);
+        let (sender, gcoderx) = mpsc::channel::<SendContent>(8);
         let (response_sender, responses) = broadcast::channel(64);
         let com_task = tokio::task::spawn(printer_com_task(port, gcoderx, response_sender));
         let serializer = Sequenced::default();
@@ -255,7 +278,7 @@ impl Printer {
     pub async fn send(
         &self,
         gcode: impl Serialize + Debug,
-    ) -> Result<tokio::task::JoinHandle<Response>, Error> {
+    ) -> Result<impl Future<Output = Result<(), Error>>, Error> {
         self.socket().ok_or(Error::Disconnected)?.send(gcode).await
     }
 
@@ -266,7 +289,10 @@ impl Printer {
     ///
     /// If your printer supports it, the sequenced `send` function is preferred,
     /// although this version is slightly lower overhead.
-    pub fn send_unsequenced(&self, gcode: impl Serialize + Debug) -> Result<(), Error> {
+    pub fn send_unsequenced(
+        &self,
+        gcode: impl Serialize + Debug,
+    ) -> Result<impl Future<Output = Result<(), Error>>, Error> {
         self.socket()
             .ok_or(Error::Disconnected)?
             .send_unsequenced(gcode)
