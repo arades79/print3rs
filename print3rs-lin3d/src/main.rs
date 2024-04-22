@@ -58,7 +58,7 @@ async fn main() -> Result<(), AppError> {
 
     writer.write_all(commands::version().as_bytes()).await?;
     writer
-        .write_all(b"\ntype `:help` for a list of commands\n")
+        .write_all(b"\ntype `help` for a list of commands\n")
         .await?;
     setup_logging(writer.clone());
 

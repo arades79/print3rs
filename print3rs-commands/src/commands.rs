@@ -9,7 +9,7 @@ use {
     },
     tokio::io::BufReader,
     tokio_serial::SerialStream,
-    winnow::ascii::alpha0,
+    winnow::{ascii::alpha0, combinator::cut_err},
 };
 
 use winnow::{
@@ -166,11 +166,8 @@ quit                          exit program
 \n";
 
 pub fn help(command: impl AsRef<str>) -> &'static str {
-    let command = command
-        .as_ref()
-        .trim()
-        .strip_prefix(':')
-        .unwrap_or(command.as_ref().trim());
+    let command = command.as_ref().trim();
+
     match command {
         "send" => "send: explicitly send one or more commands (separated by gcode comment character `;`) commands to the printer, no uppercasing or additional parsing is performed. This can be used to send commands to the printer that would otherwise be detected as a console command.\n",
         "print" => "print: execute every line of G-code sequentially from the given file. The print job is added as a task which runs in the background with the filename as the task name. Other commands can be sent while a print is running, and a print can be stopped at any time with `stop`\n",
@@ -460,8 +457,11 @@ fn parse_repeater<'a>(input: &mut &'a str) -> PResult<Command<&'a str>> {
 }
 
 fn parse_macro<'a>(input: &mut &'a str) -> PResult<Command<&'a str>> {
-    let alpha_no_reserved_start =
-        alpha1.verify(|s: &str| !s.starts_with(|c: char| "GTMND".contains(c.to_ascii_uppercase())));
+    let alpha_no_reserved_start = cut_err(alpha1)
+        .verify(|s: &str| !s.starts_with(|c: char| "GTMND".contains(c.to_ascii_uppercase())))
+        .context(winnow::error::StrContext::Label(
+            "Macro started with ambiguous character 'GTMND'",
+        ));
     let (name, steps) = (
         preceded(space0, alpha_no_reserved_start),
         preceded(space1, parse_gcodes),
@@ -471,7 +471,6 @@ fn parse_macro<'a>(input: &mut &'a str) -> PResult<Command<&'a str>> {
 }
 
 fn inner_command<'a>(input: &mut &'a str) -> PResult<Command<&'a str>> {
-    let explicit = opt(":").parse_next(input)?;
     let command = opt(dispatch! {preceded(space0, alpha1);
         "log" => parse_logger,
         "repeat" => parse_repeater,
@@ -491,10 +490,9 @@ fn inner_command<'a>(input: &mut &'a str) -> PResult<Command<&'a str>> {
         _ => empty.map(|_| Command::Unrecognized)
     })
     .parse_next(input)?;
-    match (explicit, command) {
-        (None, Some(Command::Unrecognized)) => fail.parse_next(input),
-        (_, None) => Ok(Command::Unrecognized),
-        (_, Some(command)) => Ok(command),
+    match command {
+        None | Some(Command::Unrecognized) => Ok(Command::Unrecognized),
+        Some(command) => Ok(command),
     }
 }
 
