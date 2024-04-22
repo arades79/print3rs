@@ -3,14 +3,13 @@ use {
     print3rs_core::Socket,
     std::{
         collections::HashMap,
-        default,
         fmt::Debug,
         sync::{Arc, Mutex},
         time::Duration,
     },
     tokio::io::BufReader,
     tokio_serial::SerialStream,
-    winnow::ascii::{alpha0, Caseless},
+    winnow::{ascii::alpha0, combinator::cut_err},
 };
 
 use winnow::{
@@ -33,19 +32,18 @@ async fn auto_connect() -> Printer {
             .open_native_async()
             .ok()?;
         printer_port.write_data_terminal_ready(true).ok()?;
-        let mut printer = Printer::new(BufReader::new(printer_port));
+        let printer = Printer::new(BufReader::new(printer_port));
 
-        printer.send_raw(b"M115\n").ok()?;
-        let look_for_ok = async {
-            while let Ok(line) = printer.read_next_line().await {
-                if line.to_ascii_lowercase().contains("ok") {
-                    return Some(printer);
-                }
-            }
+        let look_for_ok = printer.send_unsequenced(b"M115\n").await.ok()?;
+
+        if timeout(Duration::from_secs(5), look_for_ok)
+            .await
+            .is_ok_and(|inner| inner.is_ok())
+        {
+            Some(printer)
+        } else {
             None
-        };
-
-        timeout(Duration::from_secs(5), look_for_ok).await.ok()?
+        }
     }
     if let Ok(ports) = available_ports() {
         tracing::info!("found available ports: {ports:?}");
@@ -167,11 +165,8 @@ quit                          exit program
 \n";
 
 pub fn help(command: impl AsRef<str>) -> &'static str {
-    let command = command
-        .as_ref()
-        .trim()
-        .strip_prefix(':')
-        .unwrap_or(command.as_ref().trim());
+    let command = command.as_ref().trim();
+
     match command {
         "send" => "send: explicitly send one or more commands (separated by gcode comment character `;`) commands to the printer, no uppercasing or additional parsing is performed. This can be used to send commands to the printer that would otherwise be detected as a console command.\n",
         "print" => "print: execute every line of G-code sequentially from the given file. The print job is added as a task which runs in the background with the filename as the task name. Other commands can be sent while a print is running, and a print can be stopped at any time with `stop`\n",
@@ -380,32 +375,6 @@ impl<S> Command<S> {
             Unrecognized => Unrecognized,
         }
     }
-    // pub fn into_box(self) -> Command<Box<S>>
-    // where
-    //     Box<S>: From<S>,
-    // {
-    //     use Command::*;
-    //     match self {
-    //         Gcodes(codes) => Gcodes(codes.into_iter().map(|s| s.into()).collect()),
-    //         Print(filename) => Print(filename.into()),
-    //         Log(name, pattern) => Log(name.into(), pattern.into_iter().map(|s| s.into()).collect()),
-    //         Repeat(name, codes) => {
-    //             Repeat(name.into(), codes.into_iter().map(|s| s.into()).collect())
-    //         }
-    //         Tasks => Tasks,
-    //         Stop(s) => Stop(s.into()),
-    //         Connect(connection) => Connect(connection.into_owned()),
-    //         Disconnect => Disconnect,
-    //         Macro(name, codes) => Macro(name.into(), codes.into_iter().map(|s| s.into()).collect()),
-    //         Macros => Macros,
-    //         DeleteMacro(s) => DeleteMacro(s.into()),
-    //         Help(s) => Help(s.into()),
-    //         Version => Version,
-    //         Clear => Clear,
-    //         Quit => Quit,
-    //         Unrecognized => Unrecognized,
-    //     }
-    // }
 }
 
 impl<S> Command<S> {
@@ -487,8 +456,11 @@ fn parse_repeater<'a>(input: &mut &'a str) -> PResult<Command<&'a str>> {
 }
 
 fn parse_macro<'a>(input: &mut &'a str) -> PResult<Command<&'a str>> {
-    let alpha_no_reserved_start =
-        alpha1.verify(|s: &str| !s.starts_with(|c: char| "GTMND".contains(c.to_ascii_uppercase())));
+    let alpha_no_reserved_start = cut_err(alpha1)
+        .verify(|s: &str| !s.starts_with(|c: char| "GTMND".contains(c.to_ascii_uppercase())))
+        .context(winnow::error::StrContext::Label(
+            "Macro started with ambiguous character 'GTMND'",
+        ));
     let (name, steps) = (
         preceded(space0, alpha_no_reserved_start),
         preceded(space1, parse_gcodes),
@@ -498,7 +470,6 @@ fn parse_macro<'a>(input: &mut &'a str) -> PResult<Command<&'a str>> {
 }
 
 fn inner_command<'a>(input: &mut &'a str) -> PResult<Command<&'a str>> {
-    let explicit = opt(":").parse_next(input)?;
     let command = opt(dispatch! {preceded(space0, alpha1);
         "log" => parse_logger,
         "repeat" => parse_repeater,
@@ -518,10 +489,9 @@ fn inner_command<'a>(input: &mut &'a str) -> PResult<Command<&'a str>> {
         _ => empty.map(|_| Command::Unrecognized)
     })
     .parse_next(input)?;
-    match (explicit, command) {
-        (None, Some(Command::Unrecognized)) => fail.parse_next(input),
-        (_, None) => Ok(Command::Unrecognized),
-        (_, Some(command)) => Ok(command),
+    match command {
+        None | Some(Command::Unrecognized) => Ok(Command::Unrecognized),
+        Some(command) => Ok(command),
     }
 }
 
@@ -635,14 +605,17 @@ impl Drop for BackgroundTask {
     }
 }
 
-pub fn send_gcodes(
-    printer: &Printer,
-    codes: impl IntoIterator<Item = impl AsRef<str>>,
-) -> Result<(), PrinterError> {
-    for code in codes {
-        printer.send_unsequenced(code.as_ref())?;
+pub fn send_gcodes(socket: Socket, codes: Vec<String>) -> BackgroundTask {
+    let task: JoinHandle<Result<(), PrinterError>> = tokio::spawn(async move {
+        for code in codes {
+            socket.send_unsequenced(code.as_str()).await?.await?;
+        }
+        Ok(())
+    });
+    BackgroundTask {
+        description: "gcodes",
+        abort_handle: task.abort_handle(),
     }
-    Ok(())
 }
 
 #[derive(Debug, Clone)]
@@ -788,10 +761,18 @@ impl Commander {
                 self.responder.send(Response::Quit)?;
             }
             Gcodes(codes) => {
+                let socket = self.printer().socket().ok_or(PrinterError::Disconnected)?;
                 let codes = self.macros.expand(codes);
-                if let Err(_e) = send_gcodes(&self.printer, codes) {
-                    self.responder.send(DISCONNECTED_ERROR.into())?;
-                }
+                let task = send_gcodes(socket.clone(), codes);
+                static COUNTER: std::sync::atomic::AtomicUsize =
+                    std::sync::atomic::AtomicUsize::new(0);
+                self.tasks.insert(
+                    format!(
+                        "gcodes_{}",
+                        COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                    ),
+                    task,
+                );
             }
             Print(filename) => {
                 if let Ok(print) = start_print_file(filename, &self.printer) {

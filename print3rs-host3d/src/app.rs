@@ -106,7 +106,7 @@ impl iced::Application for App {
                 if let Err(msg) = self
                     .commander
                     .printer()
-                    .send_unsequenced(format!("G7X{x}Y{y}Z{z}"))
+                    .try_send_unsequenced(format!("G7X{x}Y{y}Z{z}"))
                 {
                     self.error_messages.push(msg.to_string());
                 }

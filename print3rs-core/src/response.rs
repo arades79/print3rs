@@ -6,30 +6,26 @@ use winnow::{
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Response {
-    Ok,
-    SequencedOk(i32),
-    Resend(i32),
+    Ok(Option<i32>),
+    Resend(Option<i32>),
 }
 
 fn ok_response(input: &mut &[u8]) -> PResult<Response> {
-    match preceded(
+    preceded(
         (space0, "ok", opt(":"), space0, opt(b'N')),
         terminated(opt(dec_int), multispace0),
     )
-    .parse_next(input)?
-    {
-        Some(num) => Ok(Response::SequencedOk(num)),
-        None => Ok(Response::Ok),
-    }
+    .map(Response::Ok)
+    .parse_next(input)
 }
 
 fn resend_response(input: &mut &[u8]) -> PResult<Response> {
-    let sequence = preceded(
+    preceded(
         (space0, "Resend:", space0),
-        terminated(dec_int, multispace0),
+        terminated(opt(dec_int), multispace0),
     )
-    .parse_next(input)?;
-    Ok(Response::Resend(sequence))
+    .map(Response::Resend)
+    .parse_next(input)
 }
 
 pub fn response(input: &mut &[u8]) -> PResult<Response> {
