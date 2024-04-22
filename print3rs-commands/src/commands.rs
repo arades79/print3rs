@@ -32,19 +32,18 @@ async fn auto_connect() -> Printer {
             .open_native_async()
             .ok()?;
         printer_port.write_data_terminal_ready(true).ok()?;
-        let mut printer = Printer::new(BufReader::new(printer_port));
+        let printer = Printer::new(BufReader::new(printer_port));
 
-        printer.send_raw(b"M115\n").ok()?;
-        let look_for_ok = async {
-            while let Ok(line) = printer.read_next_line().await {
-                if line.to_ascii_lowercase().contains("ok") {
-                    return Some(printer);
-                }
-            }
+        let look_for_ok = printer.send_unsequenced(b"M115\n").await.ok()?;
+
+        if timeout(Duration::from_secs(5), look_for_ok)
+            .await
+            .is_ok_and(|inner| inner.is_ok())
+        {
+            Some(printer)
+        } else {
             None
-        };
-
-        timeout(Duration::from_secs(5), look_for_ok).await.ok()?
+        }
     }
     if let Ok(ports) = available_ports() {
         tracing::info!("found available ports: {ports:?}");
