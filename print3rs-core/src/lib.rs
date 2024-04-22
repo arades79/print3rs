@@ -124,24 +124,13 @@ impl Socket {
     /// far apart, the buffer may overfill and the oldest messages will
     /// be dropped. In this case the oldest available message is returned.
     pub async fn read_next_line(&mut self) -> Result<Arc<str>, Error> {
-        loop {
-            match self.responses.recv().await {
-                Ok(line) => break Ok(line),
-                Err(broadcast::error::RecvError::Lagged(_)) => todo!(),
-                Err(broadcast::error::RecvError::Closed) => break Err(Error::Disconnected),
-            }
-        }
+        let line = self.responses.recv().await?;
+        Ok(line)
     }
 
     pub fn try_read_next_line(&mut self) -> Result<Arc<str>, Error> {
-        loop {
-            match self.responses.try_recv() {
-                Ok(line) => break Ok(line),
-                Err(broadcast::error::TryRecvError::Lagged(_)) => todo!(),
-                Err(broadcast::error::TryRecvError::Closed) => break Err(Error::Disconnected),
-                Err(broadcast::error::TryRecvError::Empty) => todo!(),
-            }
-        }
+        let line = self.responses.try_recv()?;
+        Ok(line)
     }
 
     /// Obtain a broadcast receiver returning all lines received by the printer
@@ -188,6 +177,12 @@ pub enum Error {
 
     #[error("Background task closed responder before response received")]
     WontRespond,
+
+    #[error("Couldn't read")]
+    TryReadLine(#[from] broadcast::error::TryRecvError),
+
+    #[error("Couldn't read")]
+    ReadLine(#[from] broadcast::error::RecvError),
 }
 
 /// Loop for handling sending/receiving in the background with possible split senders/receivers
