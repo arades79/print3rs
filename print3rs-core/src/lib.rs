@@ -60,6 +60,19 @@ impl Socket {
         Ok(response)
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
+    pub fn try_send(
+        &self,
+        gcode: impl Serialize + Debug,
+    ) -> Result<impl Future<Output = Result<(), Error>>, Error> {
+        let send_slot = self.sender.try_reserve()?;
+        let (sequence, bytes) = self.serializer.serialize(gcode);
+        let (responder, response) = oneshot::channel();
+        send_slot.send(SendContent(bytes, Some(sequence), Some(responder)));
+        let response = async { response.await.map_err(|_| Error::WontRespond) };
+        Ok(response)
+    }
+
     /// Serialize anything implementing Serialize and send the bytes to the printer
     ///
     /// There is no guarantee that a command is correctly recieved or serviced;
@@ -79,8 +92,27 @@ impl Socket {
         Ok(response)
     }
 
+    pub fn try_send_unsequenced(
+        &self,
+        gcode: impl Serialize + Debug,
+    ) -> Result<impl Future<Output = Result<(), Error>>, Error> {
+        let bytes = serialize_unsequenced(gcode);
+        let (responder, response) = oneshot::channel();
+        let send_slot = self.sender.try_reserve()?;
+        send_slot.send(SendContent(bytes, None, Some(responder)));
+        let response = async { response.await.map_err(|_| Error::WontRespond) };
+        Ok(response)
+    }
+
     /// Send any raw sequence of bytes to the printer
-    pub fn send_raw(&self, gcode: &[u8]) -> Result<(), Error> {
+    pub async fn send_raw(&self, gcode: &[u8]) -> Result<(), Error> {
+        let sender = self.sender.reserve().await?;
+        sender.send(SendContent(gcode.to_owned().into_boxed_slice(), None, None));
+        Ok(())
+    }
+
+    /// Send any raw sequence of bytes to the printer
+    pub fn try_send_raw(&self, gcode: &[u8]) -> Result<(), Error> {
         let sender = self.sender.try_reserve()?;
         sender.send(SendContent(gcode.to_owned().into_boxed_slice(), None, None));
         Ok(())
@@ -97,6 +129,17 @@ impl Socket {
                 Ok(line) => break Ok(line),
                 Err(broadcast::error::RecvError::Lagged(_)) => todo!(),
                 Err(broadcast::error::RecvError::Closed) => break Err(Error::Disconnected),
+            }
+        }
+    }
+
+    pub fn try_read_next_line(&mut self) -> Result<Arc<str>, Error> {
+        loop {
+            match self.responses.try_recv() {
+                Ok(line) => break Ok(line),
+                Err(broadcast::error::TryRecvError::Lagged(_)) => todo!(),
+                Err(broadcast::error::TryRecvError::Closed) => break Err(Error::Disconnected),
+                Err(broadcast::error::TryRecvError::Empty) => todo!(),
             }
         }
     }
@@ -274,6 +317,14 @@ impl Printer {
         self.socket().ok_or(Error::Disconnected)?.send(gcode).await
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
+    pub fn try_send(
+        &self,
+        gcode: impl Serialize + Debug,
+    ) -> Result<impl Future<Output = Result<(), Error>>, Error> {
+        self.socket().ok_or(Error::Disconnected)?.try_send(gcode)
+    }
+
     /// Serialize anything implementing Serialize and send the bytes to the printer
     ///
     /// There is no guarantee that a command is correctly recieved or serviced;
@@ -291,9 +342,27 @@ impl Printer {
             .await
     }
 
+    pub fn try_send_unsequenced(
+        &self,
+        gcode: impl Serialize + Debug,
+    ) -> Result<impl Future<Output = Result<(), Error>>, Error> {
+        self.socket()
+            .ok_or(Error::Disconnected)?
+            .try_send_unsequenced(gcode)
+    }
+
     /// Send any raw sequence of bytes to the printer
-    pub fn send_raw(&self, gcode: &[u8]) -> Result<(), Error> {
-        self.socket().ok_or(Error::Disconnected)?.send_raw(gcode)
+    pub async fn send_raw(&self, gcode: &[u8]) -> Result<(), Error> {
+        self.socket()
+            .ok_or(Error::Disconnected)?
+            .send_raw(gcode)
+            .await
+    }
+
+    pub fn try_send_raw(&self, gcode: &[u8]) -> Result<(), Error> {
+        self.socket()
+            .ok_or(Error::Disconnected)?
+            .try_send_raw(gcode)
     }
 
     /// Read the next line from the printer
@@ -306,6 +375,12 @@ impl Printer {
             .ok_or(Error::Disconnected)?
             .read_next_line()
             .await
+    }
+
+    pub fn try_read_next_line(&mut self) -> Result<Arc<str>, Error> {
+        self.socket_mut()
+            .ok_or(Error::Disconnected)?
+            .try_read_next_line()
     }
 
     /// Obtain a broadcast receiver returning all lines received by the printer
