@@ -466,11 +466,12 @@ fn parse_repeater<'a>(input: &mut &'a str) -> PResult<Command<&'a str>> {
 }
 
 fn parse_macro<'a>(input: &mut &'a str) -> PResult<Command<&'a str>> {
-    let alpha_no_reserved_start = cut_err(alpha1)
-        .verify(|s: &str| !s.starts_with(|c: char| "GTMND".contains(c.to_ascii_uppercase())))
-        .context(winnow::error::StrContext::Label(
-            "Macro started with ambiguous character 'GTMND'",
-        ));
+    let alpha_no_reserved_start =
+        cut_err(alpha1)
+            .verify(|s: &str| s.len() >= 3)
+            .context(winnow::error::StrContext::Label(
+                "Macro name length must be at least 3 characters",
+            ));
     let (name, steps) = (
         preceded(space0, alpha_no_reserved_start),
         preceded(space1, parse_gcodes),
@@ -511,14 +512,7 @@ pub fn parse_command<'a>(input: &mut &'a str) -> PResult<Command<&'a str>> {
     .parse_next(input)
 }
 
-pub fn start_print_file(
-    filename: &str,
-    printer: &Printer,
-) -> std::result::Result<BackgroundTask, print3rs_core::Error> {
-    let socket = printer
-        .socket()
-        .ok_or(print3rs_core::Error::Disconnected)?
-        .clone();
+pub fn start_print_file(filename: &str, socket: Socket) -> BackgroundTask {
     let filename = filename.to_owned();
     let task: JoinHandle<Result<(), TaskError>> = tokio::spawn(async move {
         if let Ok(file) = tokio::fs::read_to_string(filename).await {
@@ -528,10 +522,10 @@ pub fn start_print_file(
         }
         Ok(())
     });
-    Ok(BackgroundTask {
+    BackgroundTask {
         description: "print",
         abort_handle: task.abort_handle(),
-    })
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -583,7 +577,7 @@ pub fn start_logging(
     })
 }
 
-pub fn start_repeat(gcodes: Vec<String>, socket: print3rs_core::Socket) -> BackgroundTask {
+pub fn start_repeat(gcodes: Vec<String>, socket: Socket) -> BackgroundTask {
     let task: JoinHandle<Result<(), TaskError>> = tokio::spawn(async move {
         for ref line in gcodes.into_iter().cycle() {
             socket.send(line).await?.await?;
@@ -757,7 +751,6 @@ impl Commander {
     ) -> Result<(), ErrorKindOf> {
         let command = command.into();
         use Command::*;
-        const DISCONNECTED_ERROR: &str = "No printer is connected!\n";
         match command {
             Clear => {
                 self.responder.send(Response::Clear)?;
@@ -766,9 +759,9 @@ impl Commander {
                 self.responder.send(Response::Quit)?;
             }
             Gcodes(codes) => {
-                let socket = self.printer().socket().ok_or(PrinterError::Disconnected)?;
+                let socket = self.printer().socket()?.clone();
                 let codes = self.macros.expand(codes);
-                let task = send_gcodes(socket.clone(), codes);
+                let task = send_gcodes(socket, codes);
                 static COUNTER: std::sync::atomic::AtomicUsize =
                     std::sync::atomic::AtomicUsize::new(0);
                 self.tasks.insert(
@@ -780,27 +773,19 @@ impl Commander {
                 );
             }
             Print(filename) => {
-                if let Ok(print) = start_print_file(filename, &self.printer) {
-                    self.tasks.insert(filename.to_string(), print);
-                } else {
-                    self.responder.send(DISCONNECTED_ERROR.into())?;
-                }
+                let socket = self.printer.socket()?.clone();
+                let print = start_print_file(filename, socket);
+                self.tasks.insert(filename.to_string(), print);
             }
             Log(name, pattern) => {
-                if let Ok(log) = start_logging(name, pattern, &self.printer) {
-                    self.tasks.insert(name.to_string(), log);
-                } else {
-                    self.responder.send(DISCONNECTED_ERROR.into())?;
-                }
+                let log = start_logging(name, pattern, &self.printer)?;
+                self.tasks.insert(name.to_string(), log);
             }
             Repeat(name, gcodes) => {
-                if let Some(socket) = self.printer.socket() {
-                    let gcodes = self.macros.expand(gcodes);
-                    let repeat = start_repeat(gcodes, socket.clone());
-                    self.tasks.insert(name.to_string(), repeat);
-                } else {
-                    self.responder.send(DISCONNECTED_ERROR.into())?;
-                }
+                let socket = self.printer.socket()?.clone();
+                let gcodes = self.macros.expand(gcodes);
+                let repeat = start_repeat(gcodes, socket);
+                self.tasks.insert(name.to_string(), repeat);
             }
             Tasks => {
                 for (
