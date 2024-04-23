@@ -163,25 +163,25 @@ pub enum Error {
     #[error("IO error: {0}")]
     IO(#[from] std::io::Error),
 
-    #[error("Background task failed to propagate message from printer\nError message: {0}")]
+    #[error("Printer sent a bad message")]
     ResponseSender(#[from] broadcast::error::SendError<Arc<str>>),
 
-    #[error("Send queue full or closed")]
+    #[error("Failed to send command, try again")]
     Sender(#[from] mpsc::error::TrySendError<()>),
 
-    #[error("Couldn't reserve a slot to send message")]
+    #[error("Failed to send command, printer may have disconnected")]
     SendReserve(#[from] mpsc::error::SendError<()>),
 
-    #[error("Underlying printer connection was closed")]
+    #[error("Not connected to a printer")]
     Disconnected,
 
-    #[error("Background task closed responder before response received")]
+    #[error("Ok not received")]
     WontRespond,
 
-    #[error("Couldn't read")]
+    #[error("No responses recieved, try again")]
     TryReadLine(#[from] broadcast::error::TryRecvError),
 
-    #[error("Couldn't read")]
+    #[error("No responses received, printer may have disconnected")]
     ReadLine(#[from] broadcast::error::RecvError),
 }
 
@@ -262,18 +262,18 @@ impl Printer {
     }
 
     /// Obtain a cloneable socket handle to talk to printer
-    pub fn socket(&self) -> Option<&Socket> {
+    pub fn socket(&self) -> Result<&Socket, Error> {
         match self {
-            Self::Disconnected => None,
-            Self::Connected { socket, .. } => Some(socket),
+            Self::Disconnected => Err(Error::Disconnected),
+            Self::Connected { socket, .. } => Ok(socket),
         }
     }
 
     /// Obtain an exclusive socket handle - needed to read
-    pub fn socket_mut(&mut self) -> Option<&mut Socket> {
+    pub fn socket_mut(&mut self) -> Result<&mut Socket, Error> {
         match self {
-            Self::Disconnected => None,
-            Self::Connected { socket, .. } => Some(socket),
+            Self::Disconnected => Err(Error::Disconnected),
+            Self::Connected { socket, .. } => Ok(socket),
         }
     }
 
@@ -309,7 +309,7 @@ impl Printer {
         &self,
         gcode: impl Serialize + Debug,
     ) -> Result<impl Future<Output = Result<(), Error>>, Error> {
-        self.socket().ok_or(Error::Disconnected)?.send(gcode).await
+        self.socket()?.send(gcode).await
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
@@ -317,7 +317,7 @@ impl Printer {
         &self,
         gcode: impl Serialize + Debug,
     ) -> Result<impl Future<Output = Result<(), Error>>, Error> {
-        self.socket().ok_or(Error::Disconnected)?.try_send(gcode)
+        self.socket()?.try_send(gcode)
     }
 
     /// Serialize anything implementing Serialize and send the bytes to the printer
@@ -331,33 +331,23 @@ impl Printer {
         &self,
         gcode: impl Serialize + Debug,
     ) -> Result<impl Future<Output = Result<(), Error>>, Error> {
-        self.socket()
-            .ok_or(Error::Disconnected)?
-            .send_unsequenced(gcode)
-            .await
+        self.socket()?.send_unsequenced(gcode).await
     }
 
     pub fn try_send_unsequenced(
         &self,
         gcode: impl Serialize + Debug,
     ) -> Result<impl Future<Output = Result<(), Error>>, Error> {
-        self.socket()
-            .ok_or(Error::Disconnected)?
-            .try_send_unsequenced(gcode)
+        self.socket()?.try_send_unsequenced(gcode)
     }
 
     /// Send any raw sequence of bytes to the printer
     pub async fn send_raw(&self, gcode: &[u8]) -> Result<(), Error> {
-        self.socket()
-            .ok_or(Error::Disconnected)?
-            .send_raw(gcode)
-            .await
+        self.socket()?.send_raw(gcode).await
     }
 
     pub fn try_send_raw(&self, gcode: &[u8]) -> Result<(), Error> {
-        self.socket()
-            .ok_or(Error::Disconnected)?
-            .try_send_raw(gcode)
+        self.socket()?.try_send_raw(gcode)
     }
 
     /// Read the next line from the printer
@@ -366,21 +356,16 @@ impl Printer {
     /// far apart, the buffer may overfill and the oldest messages will
     /// be dropped. In this case the oldest available message is returned.
     pub async fn read_next_line(&mut self) -> Result<Arc<str>, Error> {
-        self.socket_mut()
-            .ok_or(Error::Disconnected)?
-            .read_next_line()
-            .await
+        self.socket_mut()?.read_next_line().await
     }
 
     pub fn try_read_next_line(&mut self) -> Result<Arc<str>, Error> {
-        self.socket_mut()
-            .ok_or(Error::Disconnected)?
-            .try_read_next_line()
+        self.socket_mut()?.try_read_next_line()
     }
 
     /// Obtain a broadcast receiver returning all lines received by the printer
     pub fn subscribe_lines(&self) -> Result<LineStream, Error> {
-        self.socket().ok_or(Error::Disconnected)?.subscribe_lines()
+        self.socket()?.subscribe_lines()
     }
 }
 
@@ -390,5 +375,17 @@ impl From<Option<Printer>> for Printer {
             Some(printer) => printer,
             None => Printer::Disconnected,
         }
+    }
+}
+
+impl From<&Printer> for Option<Socket> {
+    fn from(value: &Printer) -> Self {
+        value.socket().ok().cloned()
+    }
+}
+
+impl<'a> From<&'a Printer> for Option<&'a Socket> {
+    fn from(value: &'a Printer) -> Self {
+        value.socket().ok()
     }
 }
