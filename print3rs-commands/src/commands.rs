@@ -61,6 +61,18 @@ async fn auto_connect() -> Printer {
     Printer::Disconnected
 }
 
+pub fn identifier<'a>(input: &mut &'a str) -> PResult<&'a str> {
+    const NAME_CHARS: (
+        std::ops::RangeInclusive<char>,
+        std::ops::RangeInclusive<char>,
+        std::ops::RangeInclusive<char>,
+        [char; 3],
+    ) = ('a'..='z', 'A'..='Z', '0'..='9', ['-', '_', '.']);
+    take_while(1.., NAME_CHARS)
+        .verify(|ident| plausible_code.parse(ident).is_err())
+        .parse_next(input)
+}
+
 pub struct InfiniteRecursion;
 type MacrosInner = HashMap<String, Vec<String>>;
 #[derive(Debug, Default)]
@@ -457,26 +469,14 @@ fn parse_gcodes<'a>(input: &mut &'a str) -> PResult<Vec<&'a str>> {
 }
 
 fn parse_repeater<'a>(input: &mut &'a str) -> PResult<Command<&'a str>> {
-    (
-        preceded(space0, alphanumeric1),
-        preceded(space1, parse_gcodes),
-    )
+    (preceded(space0, identifier), preceded(space1, parse_gcodes))
         .map(|(name, gcodes)| Command::Repeat(name, gcodes))
         .parse_next(input)
 }
 
 fn parse_macro<'a>(input: &mut &'a str) -> PResult<Command<&'a str>> {
-    let alpha_no_reserved_start =
-        cut_err(alpha1)
-            .verify(|s: &str| s.len() >= 3)
-            .context(winnow::error::StrContext::Label(
-                "Macro name length must be at least 3 characters",
-            ));
-    let (name, steps) = (
-        preceded(space0, alpha_no_reserved_start),
-        preceded(space1, parse_gcodes),
-    )
-        .parse_next(input)?;
+    let (name, steps) =
+        (preceded(space0, identifier), preceded(space1, parse_gcodes)).parse_next(input)?;
     Ok(Command::Macro(name, steps))
 }
 

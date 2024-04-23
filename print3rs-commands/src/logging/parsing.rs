@@ -3,9 +3,13 @@ use winnow::{
     combinator::{alt, delimited, dispatch, empty, fail, preceded, repeat, rest},
     prelude::*,
     stream::AsChar,
-    token::{take, take_till, take_until, take_while},
+    token::{take, take_till, take_until},
 };
-use {crate::commands::Command, core::borrow::Borrow, winnow::ascii::space0};
+use {
+    crate::commands::{identifier, Command},
+    core::borrow::Borrow,
+    winnow::ascii::space0,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Segment<S> {
@@ -74,10 +78,8 @@ fn parse_escape<'a>(input: &mut &'a str) -> PResult<Segment<&'a str>> {
 }
 
 fn parse_value<'a>(input: &mut &'a str) -> PResult<Segment<&'a str>> {
-    let name_chars = ('a'..='z', 'A'..='Z', '0'..='9', ['-', '_', ' ', '.']);
-    let name_chars1 = take_while(1.., name_chars);
     Ok(Segment::Value(
-        delimited("{", name_chars1, "}").parse_next(input)?,
+        delimited("{", identifier, "}").parse_next(input)?,
     ))
 }
 
@@ -91,7 +93,7 @@ pub fn parse_segments<'a>(input: &mut &'a str) -> PResult<Vec<Segment<&'a str>>>
 
 pub fn parse_logger<'a>(input: &mut &'a str) -> PResult<Command<&'a str>> {
     (
-        preceded(space0, alphanumeric1),
+        preceded(space0, identifier),
         preceded(space1, parse_segments),
     )
         .map(|(name, segments)| Command::Log(name, segments))
