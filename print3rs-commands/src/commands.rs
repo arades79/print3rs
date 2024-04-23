@@ -9,12 +9,17 @@ use {
     },
     tokio::io::BufReader,
     tokio_serial::SerialStream,
-    winnow::{ascii::alpha0, combinator::cut_err},
+    winnow::{
+        ascii::{alpha0, digit1},
+        combinator::{cut_err, terminated},
+        stream::{AsChar, Stream},
+        token::take_while,
+    },
 };
 
 use winnow::{
     ascii::{alpha1, alphanumeric1, dec_uint, space0, space1},
-    combinator::{alt, dispatch, empty, fail, opt, preceded, rest, separated, seq},
+    combinator::{alt, dispatch, empty, fail, opt, preceded, rest, separated},
     prelude::*,
     token::take_till,
 };
@@ -140,7 +145,6 @@ Anything entered not matching one of the following commands is uppercased and se
 the printer for it to interpret.
 
 Some commands cannot be ran until a printer is connected.
-Some printers support 'autoconnect', otherwise you will need to connect using the serial port name.
 
 Multiple Gcodes can be sent on the same line by separating with ';'.
 
@@ -158,7 +162,6 @@ stop         <name>           stop an active print, log, or repeat
 macro        <name> <gcodes>  make an alias for a set of gcodes
 delmacro     <name>           remove an existing alias for set of gcodes
 macros                        list existing command aliases and contents           
-send         <gcodes>         explicitly send commands (split by ;) to printer exactly as typed
 connect      <proto?> <args?> connect to a device using protocol and args, or attempt to autoconnect
 disconnect                    disconnect from printer
 quit                          exit program
@@ -442,8 +445,15 @@ impl<'a> From<&'a Command<String>> for Command<&'a str> {
     }
 }
 
+fn plausible_code<'a>(input: &mut &'a str) -> PResult<&'a str> {
+    let checkpoint = input.checkpoint();
+    let _ = preceded(space0, (take_while(1, AsChar::is_alpha), digit1)).parse_next(input)?;
+    input.reset(&checkpoint);
+    take_till(2.., ';').parse_next(input)
+}
+
 fn parse_gcodes<'a>(input: &mut &'a str) -> PResult<Vec<&'a str>> {
-    separated(0.., take_till(1.., ';'), ';').parse_next(input)
+    terminated(separated(0.., plausible_code, ';'), opt(";")).parse_next(input)
 }
 
 fn parse_repeater<'a>(input: &mut &'a str) -> PResult<Command<&'a str>> {
@@ -470,7 +480,7 @@ fn parse_macro<'a>(input: &mut &'a str) -> PResult<Command<&'a str>> {
 }
 
 fn inner_command<'a>(input: &mut &'a str) -> PResult<Command<&'a str>> {
-    let command = opt(dispatch! {preceded(space0, alpha1);
+    dispatch! {preceded(space0, alpha1);
         "log" => parse_logger,
         "repeat" => parse_repeater,
         "print" => preceded(space0, rest).map(Command::Print),
@@ -483,16 +493,11 @@ fn inner_command<'a>(input: &mut &'a str) -> PResult<Command<&'a str>> {
         "macro" => parse_macro,
         "macros" => empty.map(|_| Command::Macros),
         "delmacro" => preceded(space0, rest).map(Command::DeleteMacro),
-        "send" => preceded(space0, parse_gcodes).map(Command::Gcodes),
         "clear" => empty.map(|_| Command::Clear),
         "quit" | "exit" => empty.map(|_| Command::Quit),
-        _ => empty.map(|_| Command::Unrecognized)
-    })
-    .parse_next(input)?;
-    match command {
-        None | Some(Command::Unrecognized) => Ok(Command::Unrecognized),
-        Some(command) => Ok(command),
+        _ => fail
     }
+    .parse_next(input)
 }
 
 pub fn parse_command<'a>(input: &mut &'a str) -> PResult<Command<&'a str>> {
