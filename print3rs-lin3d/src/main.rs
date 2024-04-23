@@ -98,7 +98,10 @@ async fn main() -> Result<(), AppError> {
                         continue;
                     }
                 };
-                let _ = commander.dispatch(command);
+                if let Err(e) = commander.dispatch(command) {
+                    writer.write_all(e.0.as_bytes()).await?;
+                    writer.write_all(b"\n").await?;
+                }
                 readline.add_history_entry(line);
             },
         }

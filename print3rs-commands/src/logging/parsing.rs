@@ -5,7 +5,11 @@ use winnow::{
     stream::AsChar,
     token::{take, take_till, take_until},
 };
-use {crate::commands::Command, core::borrow::Borrow, winnow::ascii::space0};
+use {
+    crate::commands::{identifier, Command},
+    core::borrow::Borrow,
+    winnow::ascii::space0,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Segment<S> {
@@ -75,7 +79,7 @@ fn parse_escape<'a>(input: &mut &'a str) -> PResult<Segment<&'a str>> {
 
 fn parse_value<'a>(input: &mut &'a str) -> PResult<Segment<&'a str>> {
     Ok(Segment::Value(
-        delimited("{", alphanumeric1.recognize(), "}").parse_next(input)?,
+        delimited("{", identifier, "}").parse_next(input)?,
     ))
 }
 
@@ -89,7 +93,7 @@ pub fn parse_segments<'a>(input: &mut &'a str) -> PResult<Vec<Segment<&'a str>>>
 
 pub fn parse_logger<'a>(input: &mut &'a str) -> PResult<Command<&'a str>> {
     (
-        preceded(space0, alphanumeric1),
+        preceded(space0, identifier),
         preceded(space1, parse_segments),
     )
         .map(|(name, segments)| Command::Log(name, segments))
@@ -164,12 +168,12 @@ mod tests {
 
     #[test]
     fn test_parse_segments() {
-        let input = " this {is}so12.?me{segm2ents}";
+        let input = " this {is}so12.?me{segm_2-ents}";
         let expected: &[Segment<&str>] = &[
             Tag(" this "),
             Value("is"),
             Tag("so12.?me"),
-            Value("segm2ents"),
+            Value("segm_2-ents"),
         ];
         let parsed = parse_segments.parse(input).unwrap();
         assert_eq!(expected, parsed);

@@ -9,12 +9,17 @@ use {
     },
     tokio::io::BufReader,
     tokio_serial::SerialStream,
-    winnow::{ascii::alpha0, combinator::cut_err},
+    winnow::{
+        ascii::{alpha0, digit1},
+        combinator::{cut_err, terminated},
+        stream::{AsChar, Stream},
+        token::take_while,
+    },
 };
 
 use winnow::{
     ascii::{alpha1, alphanumeric1, dec_uint, space0, space1},
-    combinator::{alt, dispatch, empty, fail, opt, preceded, rest, separated, seq},
+    combinator::{alt, dispatch, empty, fail, opt, preceded, rest, separated},
     prelude::*,
     token::take_till,
 };
@@ -54,6 +59,18 @@ async fn auto_connect() -> Printer {
         }
     }
     Printer::Disconnected
+}
+
+pub fn identifier<'a>(input: &mut &'a str) -> PResult<&'a str> {
+    const NAME_CHARS: (
+        std::ops::RangeInclusive<char>,
+        std::ops::RangeInclusive<char>,
+        std::ops::RangeInclusive<char>,
+        [char; 3],
+    ) = ('a'..='z', 'A'..='Z', '0'..='9', ['-', '_', '.']);
+    take_while(1.., NAME_CHARS)
+        .verify(|ident| plausible_code.parse(ident).is_err())
+        .parse_next(input)
 }
 
 pub struct InfiniteRecursion;
@@ -140,7 +157,6 @@ Anything entered not matching one of the following commands is uppercased and se
 the printer for it to interpret.
 
 Some commands cannot be ran until a printer is connected.
-Some printers support 'autoconnect', otherwise you will need to connect using the serial port name.
 
 Multiple Gcodes can be sent on the same line by separating with ';'.
 
@@ -158,7 +174,6 @@ stop         <name>           stop an active print, log, or repeat
 macro        <name> <gcodes>  make an alias for a set of gcodes
 delmacro     <name>           remove an existing alias for set of gcodes
 macros                        list existing command aliases and contents           
-send         <gcodes>         explicitly send commands (split by ;) to printer exactly as typed
 connect      <proto?> <args?> connect to a device using protocol and args, or attempt to autoconnect
 disconnect                    disconnect from printer
 quit                          exit program
@@ -442,35 +457,31 @@ impl<'a> From<&'a Command<String>> for Command<&'a str> {
     }
 }
 
+fn plausible_code<'a>(input: &mut &'a str) -> PResult<&'a str> {
+    let checkpoint = input.checkpoint();
+    let _ = preceded(space0, (take_while(1, AsChar::is_alpha), digit1)).parse_next(input)?;
+    input.reset(&checkpoint);
+    take_till(2.., ';').parse_next(input)
+}
+
 fn parse_gcodes<'a>(input: &mut &'a str) -> PResult<Vec<&'a str>> {
-    separated(0.., take_till(1.., ';'), ';').parse_next(input)
+    terminated(separated(0.., plausible_code, ';'), opt(";")).parse_next(input)
 }
 
 fn parse_repeater<'a>(input: &mut &'a str) -> PResult<Command<&'a str>> {
-    (
-        preceded(space0, alphanumeric1),
-        preceded(space1, parse_gcodes),
-    )
+    (preceded(space0, identifier), preceded(space1, parse_gcodes))
         .map(|(name, gcodes)| Command::Repeat(name, gcodes))
         .parse_next(input)
 }
 
 fn parse_macro<'a>(input: &mut &'a str) -> PResult<Command<&'a str>> {
-    let alpha_no_reserved_start = cut_err(alpha1)
-        .verify(|s: &str| !s.starts_with(|c: char| "GTMND".contains(c.to_ascii_uppercase())))
-        .context(winnow::error::StrContext::Label(
-            "Macro started with ambiguous character 'GTMND'",
-        ));
-    let (name, steps) = (
-        preceded(space0, alpha_no_reserved_start),
-        preceded(space1, parse_gcodes),
-    )
-        .parse_next(input)?;
+    let (name, steps) =
+        (preceded(space0, identifier), preceded(space1, parse_gcodes)).parse_next(input)?;
     Ok(Command::Macro(name, steps))
 }
 
 fn inner_command<'a>(input: &mut &'a str) -> PResult<Command<&'a str>> {
-    let command = opt(dispatch! {preceded(space0, alpha1);
+    dispatch! {preceded(space0, alpha1);
         "log" => parse_logger,
         "repeat" => parse_repeater,
         "print" => preceded(space0, rest).map(Command::Print),
@@ -483,16 +494,11 @@ fn inner_command<'a>(input: &mut &'a str) -> PResult<Command<&'a str>> {
         "macro" => parse_macro,
         "macros" => empty.map(|_| Command::Macros),
         "delmacro" => preceded(space0, rest).map(Command::DeleteMacro),
-        "send" => preceded(space0, parse_gcodes).map(Command::Gcodes),
         "clear" => empty.map(|_| Command::Clear),
         "quit" | "exit" => empty.map(|_| Command::Quit),
-        _ => empty.map(|_| Command::Unrecognized)
-    })
-    .parse_next(input)?;
-    match command {
-        None | Some(Command::Unrecognized) => Ok(Command::Unrecognized),
-        Some(command) => Ok(command),
+        _ => fail
     }
+    .parse_next(input)
 }
 
 pub fn parse_command<'a>(input: &mut &'a str) -> PResult<Command<&'a str>> {
@@ -506,14 +512,7 @@ pub fn parse_command<'a>(input: &mut &'a str) -> PResult<Command<&'a str>> {
     .parse_next(input)
 }
 
-pub fn start_print_file(
-    filename: &str,
-    printer: &Printer,
-) -> std::result::Result<BackgroundTask, print3rs_core::Error> {
-    let socket = printer
-        .socket()
-        .ok_or(print3rs_core::Error::Disconnected)?
-        .clone();
+pub fn start_print_file(filename: &str, socket: Socket) -> BackgroundTask {
     let filename = filename.to_owned();
     let task: JoinHandle<Result<(), TaskError>> = tokio::spawn(async move {
         if let Ok(file) = tokio::fs::read_to_string(filename).await {
@@ -523,10 +522,10 @@ pub fn start_print_file(
         }
         Ok(())
     });
-    Ok(BackgroundTask {
+    BackgroundTask {
         description: "print",
         abort_handle: task.abort_handle(),
-    })
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -578,7 +577,7 @@ pub fn start_logging(
     })
 }
 
-pub fn start_repeat(gcodes: Vec<String>, socket: print3rs_core::Socket) -> BackgroundTask {
+pub fn start_repeat(gcodes: Vec<String>, socket: Socket) -> BackgroundTask {
     let task: JoinHandle<Result<(), TaskError>> = tokio::spawn(async move {
         for ref line in gcodes.into_iter().cycle() {
             socket.send(line).await?.await?;
@@ -752,7 +751,6 @@ impl Commander {
     ) -> Result<(), ErrorKindOf> {
         let command = command.into();
         use Command::*;
-        const DISCONNECTED_ERROR: &str = "No printer is connected!\n";
         match command {
             Clear => {
                 self.responder.send(Response::Clear)?;
@@ -761,9 +759,9 @@ impl Commander {
                 self.responder.send(Response::Quit)?;
             }
             Gcodes(codes) => {
-                let socket = self.printer().socket().ok_or(PrinterError::Disconnected)?;
+                let socket = self.printer().socket()?.clone();
                 let codes = self.macros.expand(codes);
-                let task = send_gcodes(socket.clone(), codes);
+                let task = send_gcodes(socket, codes);
                 static COUNTER: std::sync::atomic::AtomicUsize =
                     std::sync::atomic::AtomicUsize::new(0);
                 self.tasks.insert(
@@ -775,27 +773,19 @@ impl Commander {
                 );
             }
             Print(filename) => {
-                if let Ok(print) = start_print_file(filename, &self.printer) {
-                    self.tasks.insert(filename.to_string(), print);
-                } else {
-                    self.responder.send(DISCONNECTED_ERROR.into())?;
-                }
+                let socket = self.printer.socket()?.clone();
+                let print = start_print_file(filename, socket);
+                self.tasks.insert(filename.to_string(), print);
             }
             Log(name, pattern) => {
-                if let Ok(log) = start_logging(name, pattern, &self.printer) {
-                    self.tasks.insert(name.to_string(), log);
-                } else {
-                    self.responder.send(DISCONNECTED_ERROR.into())?;
-                }
+                let log = start_logging(name, pattern, &self.printer)?;
+                self.tasks.insert(name.to_string(), log);
             }
             Repeat(name, gcodes) => {
-                if let Some(socket) = self.printer.socket() {
-                    let gcodes = self.macros.expand(gcodes);
-                    let repeat = start_repeat(gcodes, socket.clone());
-                    self.tasks.insert(name.to_string(), repeat);
-                } else {
-                    self.responder.send(DISCONNECTED_ERROR.into())?;
-                }
+                let socket = self.printer.socket()?.clone();
+                let gcodes = self.macros.expand(gcodes);
+                let repeat = start_repeat(gcodes, socket);
+                self.tasks.insert(name.to_string(), repeat);
             }
             Tasks => {
                 for (
