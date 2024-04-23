@@ -521,6 +521,13 @@ pub fn start_print_file(filename: &str, socket: Socket) -> BackgroundTask {
     let task: JoinHandle<Result<(), TaskError>> = tokio::spawn(async move {
         if let Ok(file) = tokio::fs::read_to_string(filename).await {
             for line in file.lines() {
+                let line = match line.split_once(';') {
+                    Some((s, _)) => s,
+                    None => line,
+                };
+                if line.is_empty() {
+                    continue;
+                };
                 socket.send(line).await?.await?;
             }
         }
