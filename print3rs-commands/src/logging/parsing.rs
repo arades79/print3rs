@@ -3,7 +3,7 @@ use winnow::{
     combinator::{alt, delimited, dispatch, empty, fail, preceded, repeat, rest},
     prelude::*,
     stream::AsChar,
-    token::{take, take_till, take_until},
+    token::{take, take_till, take_until, take_while},
 };
 use {crate::commands::Command, core::borrow::Borrow, winnow::ascii::space0};
 
@@ -74,8 +74,10 @@ fn parse_escape<'a>(input: &mut &'a str) -> PResult<Segment<&'a str>> {
 }
 
 fn parse_value<'a>(input: &mut &'a str) -> PResult<Segment<&'a str>> {
+    let name_chars = ('a'..='z', 'A'..='Z', '0'..='9', ['-', '_', ' ', '.']);
+    let name_chars1 = take_while(1.., name_chars);
     Ok(Segment::Value(
-        delimited("{", alphanumeric1.recognize(), "}").parse_next(input)?,
+        delimited("{", name_chars1, "}").parse_next(input)?,
     ))
 }
 
@@ -164,12 +166,12 @@ mod tests {
 
     #[test]
     fn test_parse_segments() {
-        let input = " this {is}so12.?me{segm2ents}";
+        let input = " this {is}so12.?me{segm_2-ents}";
         let expected: &[Segment<&str>] = &[
             Tag(" this "),
             Value("is"),
             Tag("so12.?me"),
-            Value("segm2ents"),
+            Value("segm_2-ents"),
         ];
         let parsed = parse_segments.parse(input).unwrap();
         assert_eq!(expected, parsed);
