@@ -18,11 +18,11 @@ impl Macros {
         self.0.insert(name.to_ascii_uppercase(), commands);
         Ok(())
     }
-    pub fn get(&self, name: impl AsRef<str>) -> Option<&Vec<String>> {
-        self.0.get(&name.as_ref().to_ascii_uppercase())
+    pub fn get(&self, name: &str) -> Option<&Vec<String>> {
+        self.0.get(&name.to_ascii_uppercase())
     }
-    pub fn remove(&mut self, name: impl AsRef<str>) -> Option<Vec<String>> {
-        self.0.remove(&name.as_ref().to_ascii_uppercase())
+    pub fn remove(&mut self, name: &str) -> Option<Vec<String>> {
+        self.0.remove(&name.to_ascii_uppercase())
     }
     pub fn iter(&self) -> std::collections::hash_map::Iter<'_, String, Vec<String>> {
         self.0.iter()
@@ -80,9 +80,37 @@ mod test {
     use super::*;
 
     #[test]
-    fn no_infinite_recurse() {
+    fn macro_expansion() {
         let mut macros = Macros::new();
-        macros.add("zero", vec!["one", "two", "zero"]).unwrap();
-        macros.add("one", vec!["zero", "one", "two"]).unwrap_err();
+        macros.add("codes", ["G0", "G1", "G2"]).unwrap();
+        macros.add("codes2", ["codes", "G100"]).unwrap();
+        assert_eq!(
+            macros.get("codes2").unwrap(),
+            &vec!["G0", "G1", "G2", "G100"]
+        );
+    }
+
+    #[test]
+    fn remove_macros() {
+        let mut macros = Macros::new();
+        macros.add("test", ["G0", "G1"]).unwrap();
+        assert!(macros.get("test").is_some());
+        let expansion = macros.remove("test").unwrap();
+        assert_eq!(expansion, vec!["G0", "G1"]);
+        assert!(macros.get("test").is_none());
+    }
+
+    #[test]
+    fn detect_infinite_recursion() {
+        let mut macros = Macros::new();
+        macros.add("zero", ["one", "two", "zero"]).unwrap();
+        macros.add("one", ["zero", "one", "two"]).unwrap_err();
+    }
+
+    #[test]
+    fn mutual_ref_not_recursive() {
+        let mut macros = Macros::new();
+        macros.add("zero", ["one", "two", "three"]).unwrap();
+        macros.add("one", ["zero", "one", "two"]).unwrap();
     }
 }
