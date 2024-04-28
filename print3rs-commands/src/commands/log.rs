@@ -1,5 +1,5 @@
 use winnow::{
-    ascii::{alphanumeric1, float, space1},
+    ascii::{float, space1},
     combinator::{alt, delimited, dispatch, empty, fail, preceded, repeat, rest},
     prelude::*,
     stream::AsChar,

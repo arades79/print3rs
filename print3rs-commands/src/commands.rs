@@ -1,15 +1,18 @@
 use {
+    self::{
+        connect::Connection,
+        log::{get_headers, make_parser, parse_logger, Segment},
+    },
+    crate::commands::connect::parse_connection,
     core::borrow::Borrow,
     print3rs_core::Socket,
     std::{
         collections::HashMap,
         fmt::Debug,
         sync::{Arc, Mutex},
-        time::Duration,
     },
-    tokio_serial::SerialStream,
     winnow::{
-        ascii::{alpha0, digit1},
+        ascii::digit1,
         combinator::terminated,
         stream::{AsChar, Stream},
         token::take_while,
@@ -17,7 +20,7 @@ use {
 };
 
 use winnow::{
-    ascii::{alpha1, dec_uint, space0, space1},
+    ascii::{alpha1, space0, space1},
     combinator::{alt, dispatch, empty, fail, opt, preceded, rest, separated},
     prelude::*,
     token::take_till,
@@ -27,43 +30,16 @@ use tokio::{
     io::{AsyncWriteExt, BufReader},
     net::TcpStream,
     task::JoinHandle,
-    time::timeout,
 };
 
 use print3rs_core::{Error as PrinterError, Printer};
-use tokio_serial::{available_ports, SerialPort, SerialPortBuilderExt, SerialPortInfo};
+use tokio_serial::SerialPortBuilderExt;
 
-async fn auto_connect() -> Printer {
-    async fn check_port(port: SerialPortInfo) -> Option<Printer> {
-        tracing::debug!("checking port {}...", port.port_name);
-        let mut printer_port = tokio_serial::new(port.port_name, 115200)
-            .timeout(Duration::from_secs(10))
-            .open_native_async()
-            .ok()?;
-        printer_port.write_data_terminal_ready(true).ok()?;
-        let printer = Printer::new(BufReader::new(printer_port));
-
-        let look_for_ok = printer.send_unsequenced(b"M115\n").await.ok()?;
-
-        if timeout(Duration::from_secs(5), look_for_ok)
-            .await
-            .is_ok_and(|inner| inner.is_ok())
-        {
-            Some(printer)
-        } else {
-            None
-        }
-    }
-    if let Ok(ports) = available_ports() {
-        tracing::info!("found available ports: {ports:?}");
-        for port in ports {
-            if let Some(printer) = check_port(port).await {
-                return printer;
-            }
-        }
-    }
-    Printer::Disconnected
-}
+mod connect;
+mod help;
+mod log;
+mod macros;
+mod version;
 
 pub fn identifier<'a>(input: &mut &'a str) -> PResult<&'a str> {
     const NAME_CHARS: (
@@ -75,256 +51,6 @@ pub fn identifier<'a>(input: &mut &'a str) -> PResult<&'a str> {
     take_while(1.., NAME_CHARS)
         .verify(|ident| plausible_code.parse(ident).is_err())
         .parse_next(input)
-}
-
-pub struct InfiniteRecursion;
-type MacrosInner = HashMap<String, Vec<String>>;
-#[derive(Debug, Default)]
-pub struct Macros(MacrosInner);
-impl Macros {
-    pub fn new() -> Self {
-        Self(MacrosInner::new())
-    }
-    pub fn add(
-        &mut self,
-        name: impl AsRef<str>,
-        steps: impl IntoIterator<Item = impl AsRef<str>>,
-    ) -> Result<(), InfiniteRecursion> {
-        let commands = self.expand_for_insertion(steps)?;
-        self.0.insert(name.as_ref().to_ascii_uppercase(), commands);
-        Ok(())
-    }
-    pub fn get(&self, name: impl AsRef<str>) -> Option<&Vec<String>> {
-        self.0.get(&name.as_ref().to_ascii_uppercase())
-    }
-    pub fn remove(&mut self, name: impl AsRef<str>) -> Option<Vec<String>> {
-        self.0.remove(&name.as_ref().to_ascii_uppercase())
-    }
-    pub fn iter(&self) -> std::collections::hash_map::Iter<'_, String, Vec<String>> {
-        self.0.iter()
-    }
-    fn expand_recursive(
-        &self,
-        expanded: &mut Vec<String>,
-        code: &str,
-        already_expanded: Option<Vec<&str>>,
-    ) -> Result<(), InfiniteRecursion> {
-        // track expressions already expanded to prevent infinite recursion
-        let mut already_expanded = already_expanded.unwrap_or_default();
-        if already_expanded.contains(&code) {
-            return Err(InfiniteRecursion);
-        }
-        match self.get(code) {
-            Some(expansion) => {
-                already_expanded.push(code);
-                for extra in expansion {
-                    self.expand_recursive(expanded, extra, Some(already_expanded.clone()))?
-                }
-            }
-            None => expanded.push(code.to_ascii_uppercase()),
-        };
-        Ok(())
-    }
-    /// recursively expand all in input sequence before placing into internal map
-    /// placing recursion here eliminates possibility of infinite recursion
-    fn expand_for_insertion(
-        &self,
-        codes: impl IntoIterator<Item = impl AsRef<str>>,
-    ) -> Result<Vec<String>, InfiniteRecursion> {
-        let mut expanded = vec![];
-
-        for code in codes {
-            self.expand_recursive(&mut expanded, code.as_ref(), None)?;
-        }
-        Ok(expanded)
-    }
-
-    pub fn expand(&self, codes: impl IntoIterator<Item = impl AsRef<str>>) -> Vec<String> {
-        let mut expanded = vec![];
-        for code in codes {
-            match self.get(&code) {
-                Some(expansion) => expanded.extend(expansion.iter().cloned()),
-                None => expanded.push(code.as_ref().to_ascii_uppercase()),
-            }
-        }
-        expanded
-    }
-}
-
-pub fn version() -> &'static str {
-    const VERSION: Option<&str> = option_env!("CARGO_PKG_VERSION");
-    VERSION.unwrap_or("???")
-}
-
-static FULL_HELP: &str = "    
-Anything entered not matching one of the following commands is uppercased and sent to
-the printer for it to interpret.
-
-Some commands cannot be ran until a printer is connected.
-
-Multiple Gcodes can be sent on the same line by separating with ';'.
-
-Arguments with ? are optional.
-
-Available commands:
-help         <command?>       display this message or details for specified command
-version                       display version
-clear                         clear all text on the screen
-printerinfo                   display any information found about the connected printer
-print        <file>           send gcodes from file to printer
-log          <name> <pattern> begin logging parsed output from printer
-repeat       <name> <gcodes>  run the given gcodes in a loop until stop
-stop         <name>           stop an active print, log, or repeat
-macro        <name> <gcodes>  make an alias for a set of gcodes
-delmacro     <name>           remove an existing alias for set of gcodes
-macros                        list existing command aliases and contents           
-connect      <proto?> <args?> connect to a device using protocol and args, or attempt to autoconnect
-disconnect                    disconnect from printer
-quit                          exit program
-\n";
-
-pub fn help(command: impl AsRef<str>) -> &'static str {
-    let command = command.as_ref().trim();
-
-    match command {
-        "send" => "send: explicitly send one or more commands (separated by gcode comment character `;`) commands to the printer, no uppercasing or additional parsing is performed. This can be used to send commands to the printer that would otherwise be detected as a console command.\n",
-        "print" => "print: execute every line of G-code sequentially from the given file. The print job is added as a task which runs in the background with the filename as the task name. Other commands can be sent while a print is running, and a print can be stopped at any time with `stop`\n",
-        "log" => "log: begin logging the specified pattern from the printer into a csv with the `name` given. This operation runs in the background and is added as a task which can be stopped with `stop`. The pattern given will be used to parse the logs, with values wrapped in `{}` being given a column of whatever is between the `{}`, and pulling a number in its place. If your pattern needs to include a literal `{` or `}`, double them up like `{{` or `}}` to have the parser read it as just a `{` or `}` in the output.\n",
-        "repeat" => "repeat: repeat the given Gcodes (separated by gcode comment character `;`) in a loop until stopped. \n",
-        "stop" => "stop: stops a task running in the background. All background tasks are required to have a name, thus this command can be used to stop them. Tasks can also stop themselves if they fail or can complete, after which running this will do nothing.\n",
-        "connect" => "connect: Manually connect to a printer by specifying a protocol and some arguments. Arguments depend on protocol. For serial connection specify its path and optionally its baudrate. On windows this looks like `connect serial COM3 115200`, on linux more like `connect serial /dev/tty/ACM0 250000`. This does not test if the printer is capable of responding to messages, it will only open the port. Specifying no arguments will attempt autoconnection using serial.\n",
-        "disconnect" => "disconnect: disconnect from the currently connected printer. All active tasks will be stopped\n",
-        "macro" => "create a case-insensitve alias to some set of gcodes, even containing other macros recursively to build up complex sets of builds with a single word. Macro names cannot start with G,T,M,N, or D to avoid conflict with Gcodes, and cannot have any non-alphanumeric characters. commands in a macro are separated by ';', and macros can be used anywhere Gcodes are passed, including repeat commands and sends.\n",
-        _ => FULL_HELP,
-    }
-}
-
-use crate::logging::parsing::{parse_logger, Segment};
-
-#[non_exhaustive]
-#[derive(Debug, Default, Clone)]
-pub enum Connection<S> {
-    #[default]
-    Auto,
-    Serial {
-        port: S,
-        baud: Option<u32>,
-    },
-    Tcp {
-        hostname: S,
-        port: Option<u16>,
-    },
-    Mqtt {
-        hostname: S,
-        port: Option<u16>,
-        in_topic: Option<S>,
-        out_topic: Option<S>,
-    },
-}
-
-impl<S> Connection<S> {
-    fn into_owned(self) -> Connection<<S as ToOwned>::Owned>
-    where
-        S: ToOwned,
-    {
-        match self {
-            Connection::Auto => Connection::Auto,
-            Connection::Serial { port, baud } => Connection::Serial {
-                port: port.to_owned(),
-                baud,
-            },
-            Connection::Tcp { hostname, port } => Connection::Tcp {
-                hostname: hostname.to_owned(),
-                port,
-            },
-            Connection::Mqtt {
-                hostname,
-                port,
-                in_topic,
-                out_topic,
-            } => Connection::Mqtt {
-                hostname: hostname.to_owned(),
-                port,
-                in_topic: in_topic.map(|s| s.to_owned()),
-                out_topic: out_topic.map(|s| s.to_owned()),
-            },
-        }
-    }
-    fn to_borrowed<Borrowed: ?Sized>(&self) -> Connection<&Borrowed>
-    where
-        S: Borrow<Borrowed>,
-    {
-        match self {
-            Connection::Auto => Connection::Auto,
-            Connection::Serial { port, baud } => Connection::Serial {
-                port: port.borrow(),
-                baud: *baud,
-            },
-            Connection::Tcp { hostname, port } => Connection::Tcp {
-                hostname: hostname.borrow(),
-                port: *port,
-            },
-            Connection::Mqtt {
-                hostname,
-                port,
-                in_topic,
-                out_topic,
-            } => Connection::Mqtt {
-                hostname: hostname.borrow(),
-                port: *port,
-                in_topic: in_topic.as_ref().map(|s| s.borrow()),
-                out_topic: out_topic.as_ref().map(|s| s.borrow()),
-            },
-        }
-    }
-}
-
-fn parse_serial_connection<'a>(input: &mut &'a str) -> PResult<Connection<&'a str>> {
-    let (port, baud) = (
-        preceded(space0, take_till(1.., ' ')),
-        preceded(space1, opt(dec_uint)),
-    )
-        .parse_next(input)?;
-    Ok(Connection::Serial { port, baud })
-}
-
-fn parse_tcp_connection<'a>(input: &mut &'a str) -> PResult<Connection<&'a str>> {
-    let (hostname, port) = (
-        preceded(space0, take_till(1.., ' ')),
-        preceded(space1, opt(dec_uint)),
-    )
-        .parse_next(input)?;
-    Ok(Connection::Tcp { hostname, port })
-}
-
-fn parse_mqtt_connection<'a>(input: &mut &'a str) -> PResult<Connection<&'a str>> {
-    let (hostname, port) = (
-        preceded(space0, take_till(1.., ' ')),
-        preceded(space1, opt(dec_uint)),
-    )
-        .parse_next(input)?;
-    let (in_topic, out_topic) = (
-        preceded(space0, opt(take_till(1.., ' '))),
-        preceded(space0, opt(take_till(1.., ' '))),
-    )
-        .parse_next(input)?;
-    Ok(Connection::Mqtt {
-        hostname,
-        port,
-        in_topic,
-        out_topic,
-    })
-}
-
-fn parse_connection<'a>(input: &mut &'a str) -> PResult<Command<&'a str>> {
-    let connection = dispatch! { preceded(space0, alpha0);
-        "serial" => parse_serial_connection,
-        "tcp" | "ip" => parse_tcp_connection,
-        "mqtt" => parse_mqtt_connection,
-        _ => empty.map(|_| Connection::Auto),
-    }
-    .parse_next(input)?;
-    Ok(Command::Connect(connection))
 }
 
 #[non_exhaustive]
@@ -549,7 +275,7 @@ enum TaskError {
 
 pub fn start_logging(
     name: &str,
-    pattern: Vec<crate::logging::parsing::Segment<&'_ str>>,
+    pattern: Vec<Segment<&'_ str>>,
     printer: &Printer,
 ) -> std::result::Result<BackgroundTask, print3rs_core::Error> {
     let filename = format!(
@@ -559,9 +285,9 @@ pub fn start_logging(
             .unwrap()
             .as_secs()
     );
-    let header = crate::logging::parsing::get_headers(&pattern);
+    let header = get_headers(&pattern);
 
-    let mut parser = crate::logging::parsing::make_parser(pattern);
+    let mut parser = make_parser(pattern);
     let mut log_printer_reader = printer.subscribe_lines()?;
     let log_task_handle = tokio::spawn(async move {
         let mut log_file = tokio::fs::File::create(filename).await.unwrap();
@@ -669,7 +395,7 @@ type ResponseReceiver = tokio::sync::broadcast::Receiver<Response>;
 pub struct Commander {
     printer: Printer,
     pub tasks: Tasks,
-    pub macros: Macros,
+    pub macros: macros::Macros,
     responder: ResponseSender,
 }
 #[derive(Debug, Clone)]
@@ -826,7 +552,7 @@ impl Commander {
                         self.responder.send("Connecting...\n".into())?;
                         let autoconnect_responder = self.responder.clone();
                         tokio::spawn(async move {
-                            let printer = auto_connect().await;
+                            let printer = connect::auto_connect().await;
                             let response = if printer.is_connected() {
                                 Response::Output("Found Printer!\n".into())
                             } else {
@@ -873,10 +599,10 @@ impl Commander {
                 self.printer.disconnect()
             }
             Help(subcommand) => {
-                self.responder.send(help(subcommand).into())?;
+                self.responder.send(help::help(subcommand).into())?;
             }
             Version => {
-                self.responder.send(version().into())?;
+                self.responder.send(version::version().into())?;
             }
             _ => {
                 self.responder.send("Unsupported command!\n".into())?;
