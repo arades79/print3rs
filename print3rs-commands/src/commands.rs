@@ -7,24 +7,28 @@ use {
         sync::{Arc, Mutex},
         time::Duration,
     },
-    tokio::io::BufReader,
     tokio_serial::SerialStream,
     winnow::{
         ascii::{alpha0, digit1},
-        combinator::{cut_err, terminated},
+        combinator::terminated,
         stream::{AsChar, Stream},
         token::take_while,
     },
 };
 
 use winnow::{
-    ascii::{alpha1, alphanumeric1, dec_uint, space0, space1},
+    ascii::{alpha1, dec_uint, space0, space1},
     combinator::{alt, dispatch, empty, fail, opt, preceded, rest, separated},
     prelude::*,
     token::take_till,
 };
 
-use tokio::{io::AsyncWriteExt, task::JoinHandle, time::timeout};
+use tokio::{
+    io::{AsyncWriteExt, BufReader},
+    net::TcpStream,
+    task::JoinHandle,
+    time::timeout,
+};
 
 use print3rs_core::{Error as PrinterError, Printer};
 use tokio_serial::{available_ports, SerialPort, SerialPortBuilderExt, SerialPortInfo};
@@ -517,6 +521,13 @@ pub fn start_print_file(filename: &str, socket: Socket) -> BackgroundTask {
     let task: JoinHandle<Result<(), TaskError>> = tokio::spawn(async move {
         if let Ok(file) = tokio::fs::read_to_string(filename).await {
             for line in file.lines() {
+                let line = match line.split_once(';') {
+                    Some((s, _)) => s,
+                    None => line,
+                };
+                if line.is_empty() {
+                    continue;
+                };
                 socket.send(line).await?.await?;
             }
         }
@@ -679,18 +690,6 @@ impl Default for Commander {
     }
 }
 
-impl<'a> TryFrom<Connection<&'a str>> for BufReader<SerialStream> {
-    type Error = tokio_serial::Error;
-
-    fn try_from(value: Connection<&'a str>) -> Result<Self, Self::Error> {
-        let Connection::Serial { port, baud } = value else {
-            todo!()
-        };
-        let stream = tokio_serial::new(port, baud.unwrap_or(115200)).open_native_async()?;
-        Ok(BufReader::new(stream))
-    }
-}
-
 impl Commander {
     pub fn new() -> Self {
         let (responder, _) = tokio::sync::broadcast::channel(32);
@@ -841,17 +840,26 @@ impl Commander {
                             let _ = autoconnect_responder.send(response);
                         });
                     }
-                    Connection::Serial { .. } => {
-                        if let Ok(port) = connection.try_into() {
-                            self.tasks.clear();
-                            self.printer.connect::<BufReader<SerialStream>>(port);
-                            self.add_printer_output_to_responses();
-                        } else {
-                            self.responder
-                                .send(Response::Error("Connection failed.\n".into()))?;
-                        };
+                    Connection::Serial { port, baud } => {
+                        let connection =
+                            tokio_serial::new(port, baud.unwrap_or(115200)).open_native_async()?;
+                        let connection = BufReader::new(connection);
+                        self.tasks.clear();
+                        self.printer.connect(connection);
+                        self.add_printer_output_to_responses();
                     }
-                    Connection::Tcp { hostname, port } => todo!(),
+                    Connection::Tcp { hostname, port } => {
+                        let addr = if let Some(port) = port {
+                            format!("{hostname}:{port}")
+                        } else {
+                            hostname.to_owned()
+                        };
+                        let connection = std::net::TcpStream::connect(addr)?;
+                        let connection = BufReader::new(TcpStream::from_std(connection)?);
+                        self.tasks.clear();
+                        self.printer.connect(connection);
+                        self.add_printer_output_to_responses();
+                    }
                     Connection::Mqtt {
                         hostname,
                         port,
