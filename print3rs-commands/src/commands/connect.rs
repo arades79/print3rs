@@ -5,8 +5,8 @@ use {
     tokio::{io::BufReader, time::timeout},
     tokio_serial::{available_ports, SerialPort, SerialPortBuilderExt, SerialPortInfo},
     winnow::{
-        ascii::{alpha0, dec_uint, space0, space1},
-        combinator::{dispatch, empty, opt, preceded},
+        ascii::{alpha0, dec_uint, space0},
+        combinator::{alt, dispatch, empty, opt, preceded, terminated},
         prelude::*,
         token::take_till,
     },
@@ -45,7 +45,7 @@ pub async fn auto_connect() -> Printer {
 }
 
 #[non_exhaustive]
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub enum Connection<S> {
     #[default]
     Auto,
@@ -125,32 +125,35 @@ impl<S> Connection<S> {
 fn parse_serial_connection<'a>(input: &mut &'a str) -> PResult<Connection<&'a str>> {
     let (port, baud) = (
         preceded(space0, take_till(1.., ' ')),
-        preceded(space1, opt(dec_uint)),
+        preceded(space0, opt(dec_uint)),
     )
         .parse_next(input)?;
     Ok(Connection::Serial { port, baud })
 }
 
-fn parse_tcp_connection<'a>(input: &mut &'a str) -> PResult<Connection<&'a str>> {
-    let (hostname, port) = (
-        preceded(space0, take_till(1.., ' ')),
-        preceded(space1, opt(dec_uint)),
+fn parse_hostname_port<'a>(input: &mut &'a str) -> PResult<(&'a str, Option<u16>)> {
+    (
+        preceded(space0, take_till(1.., [' ', ':'])),
+        preceded(alt((":", space0)), opt(dec_uint)),
     )
-        .parse_next(input)?;
+        .parse_next(input)
+}
+
+fn parse_tcp_connection<'a>(input: &mut &'a str) -> PResult<Connection<&'a str>> {
+    let (hostname, port) = terminated(parse_hostname_port, space0).parse_next(input)?;
     Ok(Connection::Tcp { hostname, port })
 }
 
 fn parse_mqtt_connection<'a>(input: &mut &'a str) -> PResult<Connection<&'a str>> {
-    let (hostname, port) = (
-        preceded(space0, take_till(1.., ' ')),
-        preceded(space1, opt(dec_uint)),
+    let (hostname, port) = parse_hostname_port.parse_next(input)?;
+    let (in_topic, out_topic) = terminated(
+        (
+            preceded(space0, opt(take_till(1.., ' '))),
+            preceded(space0, opt(take_till(1.., ' '))),
+        ),
+        space0,
     )
-        .parse_next(input)?;
-    let (in_topic, out_topic) = (
-        preceded(space0, opt(take_till(1.., ' '))),
-        preceded(space0, opt(take_till(1.., ' '))),
-    )
-        .parse_next(input)?;
+    .parse_next(input)?;
     Ok(Connection::Mqtt {
         hostname,
         port,
@@ -168,4 +171,117 @@ pub fn parse_connection<'a>(input: &mut &'a str) -> PResult<Command<&'a str>> {
     }
     .parse_next(input)?;
     Ok(Command::Connect(connection))
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn serial_space_parsing() {
+        let serial = parse_serial_connection.parse("  /dev/ttyS0  9600").unwrap();
+        assert_eq!(
+            serial,
+            Connection::Serial {
+                port: "/dev/ttyS0",
+                baud: Some(9600)
+            }
+        );
+    }
+
+    #[test]
+    fn serial_baudless_parsing() {
+        let serial = parse_serial_connection.parse("COM1").unwrap();
+        assert_eq!(
+            serial,
+            Connection::Serial {
+                port: "COM1",
+                baud: None
+            }
+        );
+    }
+
+    #[test]
+    fn ip_space_parsing() {
+        let ip = parse_hostname_port.parse("  1.1.1.1  8080").unwrap();
+        assert_eq!(ip, ("1.1.1.1", Some(8080)));
+    }
+
+    #[test]
+    fn ip_colon_parsing() {
+        let ip = parse_hostname_port.parse("google.com:80").unwrap();
+        assert_eq!(ip, ("google.com", Some(80)));
+    }
+
+    #[test]
+    fn tcp_parsing() {
+        let tcp = parse_tcp_connection
+            .parse(" dopewebsite.biz:10000 ")
+            .unwrap();
+        assert_eq!(
+            tcp,
+            Connection::Tcp {
+                hostname: "dopewebsite.biz",
+                port: Some(10000)
+            }
+        );
+    }
+
+    #[test]
+    fn tcp_portless_parsing() {
+        let tcp = parse_tcp_connection.parse(" 8.8.8.8 ").unwrap();
+        assert_eq!(
+            tcp,
+            Connection::Tcp {
+                hostname: "8.8.8.8",
+                port: None
+            }
+        );
+    }
+
+    #[test]
+    fn mqtt_default_parsing() {
+        let mqtt = parse_mqtt_connection.parse("printer.local").unwrap();
+        assert_eq!(
+            mqtt,
+            Connection::Mqtt {
+                hostname: "printer.local",
+                port: None,
+                in_topic: None,
+                out_topic: None
+            }
+        );
+    }
+
+    #[test]
+    fn mqtt_in_parsing() {
+        let mqtt = parse_mqtt_connection
+            .parse("printer.local /control/gcode")
+            .unwrap();
+        assert_eq!(
+            mqtt,
+            Connection::Mqtt {
+                hostname: "printer.local",
+                port: None,
+                in_topic: Some("/control/gcode"),
+                out_topic: None
+            }
+        );
+    }
+
+    #[test]
+    fn mqtt_all_parsing() {
+        let mqtt = parse_mqtt_connection
+            .parse("printer.local:1963 /control/gcode /printer/log")
+            .unwrap();
+        assert_eq!(
+            mqtt,
+            Connection::Mqtt {
+                hostname: "printer.local",
+                port: Some(1963),
+                in_topic: Some("/control/gcode"),
+                out_topic: Some("/printer/log")
+            }
+        );
+    }
 }
