@@ -65,11 +65,8 @@ pub enum Connection<S> {
     },
 }
 
-impl<S> Connection<S> {
-    pub fn into_owned(self) -> Connection<<S as ToOwned>::Owned>
-    where
-        S: ToOwned,
-    {
+impl<'a> Connection<&'a str> {
+    pub fn into_owned(self) -> Connection<String> {
         match self {
             Connection::Auto => Connection::Auto,
             Connection::Serial { port, baud } => Connection::Serial {
@@ -93,9 +90,11 @@ impl<S> Connection<S> {
             },
         }
     }
+}
+impl Connection<String> {
     pub fn to_borrowed<Borrowed: ?Sized>(&self) -> Connection<&Borrowed>
     where
-        S: Borrow<Borrowed>,
+        String: Borrow<Borrowed>,
     {
         match self {
             Connection::Auto => Connection::Auto,

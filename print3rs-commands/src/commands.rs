@@ -60,31 +60,19 @@ pub enum Command<S> {
     Unrecognized,
 }
 
-impl<S> Command<S> {
-    pub fn into_owned(self) -> Command<S::Owned>
-    where
-        S: ToOwned,
-        Segment<S::Owned>: From<Segment<S>>,
-    {
+impl<'a> Command<&'a str> {
+    pub fn into_owned(self) -> Command<String> {
         use Command::*;
         match self {
-            Gcodes(codes) => Gcodes(
-                codes
-                    .into_iter()
-                    .map(|arg0: S| ToOwned::to_owned(&arg0))
-                    .collect(),
-            ),
+            Gcodes(codes) => Gcodes(codes.into_iter().map(str::to_owned).collect()),
             Print(filename) => Print(filename.to_owned()),
             Log(name, pattern) => Log(
                 name.to_owned(),
-                pattern.into_iter().map(|s| s.into()).collect(),
+                pattern.into_iter().map(Segment::into_owned).collect(),
             ),
             Repeat(name, codes) => Repeat(
                 name.to_owned(),
-                codes
-                    .into_iter()
-                    .map(|arg0: S| ToOwned::to_owned(&arg0))
-                    .collect(),
+                codes.into_iter().map(str::to_owned).collect(),
             ),
             Tasks => Tasks,
             Stop(s) => Stop(s.to_owned()),
@@ -92,10 +80,7 @@ impl<S> Command<S> {
             Disconnect => Disconnect,
             Macro(name, codes) => Macro(
                 name.to_owned(),
-                codes
-                    .into_iter()
-                    .map(|arg0: S| ToOwned::to_owned(&arg0))
-                    .collect(),
+                codes.into_iter().map(str::to_owned).collect(),
             ),
             Macros => Macros,
             DeleteMacro(s) => DeleteMacro(s.to_owned()),
@@ -108,11 +93,10 @@ impl<S> Command<S> {
     }
 }
 
-impl<S> Command<S> {
-    pub fn to_borrowed<'a, Borrowed: ?Sized>(&'a self) -> Command<&'a Borrowed>
+impl Command<String> {
+    pub fn to_borrowed<Borrowed: ?Sized>(&self) -> Command<&Borrowed>
     where
-        S: Borrow<Borrowed>,
-        Segment<&'a Borrowed>: From<Segment<S>>,
+        String: Borrow<Borrowed>,
     {
         use Command::*;
         match self {
@@ -120,7 +104,7 @@ impl<S> Command<S> {
             Print(filename) => Print(filename.borrow()),
             Log(name, pattern) => Log(
                 name.borrow(),
-                pattern.iter().map(|s| s.to_borrowed()).collect(),
+                pattern.iter().map(Segment::to_borrowed).collect(),
             ),
             Repeat(name, codes) => {
                 Repeat(name.borrow(), codes.iter().map(|s| s.borrow()).collect())
@@ -143,33 +127,13 @@ impl<S> Command<S> {
 
 impl<'a> From<Command<&'a str>> for Command<String> {
     fn from(command: Command<&'a str>) -> Self {
-        command.into_owned().into()
+        command.into_owned()
     }
 }
 
 impl<'a> From<&'a Command<String>> for Command<&'a str> {
     fn from(command: &'a Command<String>) -> Self {
-        use Command::*;
-        match command {
-            Gcodes(codes) => Gcodes(codes.iter().map(|s| s.as_str()).collect()),
-            Print(filename) => Print(filename.as_str()),
-            Log(name, pattern) => Log(name.as_str(), pattern.iter().map(|s| s.into()).collect()),
-            Repeat(name, codes) => {
-                Repeat(name.as_str(), codes.iter().map(|s| s.as_str()).collect())
-            }
-            Tasks => Tasks,
-            Stop(s) => Stop(s.as_str()),
-            Connect(connection) => Connect(connection.to_borrowed()),
-            Disconnect => Disconnect,
-            Macro(name, codes) => Macro(name.as_str(), codes.iter().map(|s| s.as_str()).collect()),
-            Macros => Macros,
-            DeleteMacro(s) => DeleteMacro(s.as_str()),
-            Help(s) => Help(s.as_str()),
-            Version => Version,
-            Clear => Clear,
-            Quit => Quit,
-            Unrecognized => Unrecognized,
-        }
+        command.to_borrowed()
     }
 }
 
