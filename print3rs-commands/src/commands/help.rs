@@ -48,5 +48,6 @@ fn test_help() {
         help("fhsfhebfuhubfhiedbudbhfjuygehrjfuygrhejdnbfgytu8r7y4jnb5thuif9d8s7wyhj3m4nrb"),
         FULL_HELP
     );
-    assert_ne!(help("print"), help("stop"));
+    assert_ne!(help("print "), help(" stop"));
+    assert_ne!(help(" connect "), help("disconnect"));
 }
