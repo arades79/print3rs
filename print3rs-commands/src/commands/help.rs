@@ -44,10 +44,7 @@ pub fn help(command: &str) -> &'static str {
 #[cfg(test)]
 #[test]
 fn test_help() {
-    assert_eq!(
-        help("fhsfhebfuhubfhiedbudbhfjuygehrjfuygrhejdnbfgytu8r7y4jnb5thuif9d8s7wyhj3m4nrb"),
-        FULL_HELP
-    );
+    assert_eq!(help(""), FULL_HELP);
     assert_ne!(help("print "), help(" stop"));
     assert_ne!(help(" connect "), help("disconnect"));
 }
