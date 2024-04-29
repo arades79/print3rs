@@ -41,19 +41,6 @@ impl<'a> From<Segment<&'a str>> for Segment<String> {
     }
 }
 
-impl<'a, S: ?Sized> From<Segment<&'a S>> for Segment<Box<S>>
-where
-    Box<S>: From<&'a S>,
-{
-    fn from(value: Segment<&'a S>) -> Self {
-        match value {
-            Segment::Tag(s) => Segment::Tag(s.into()),
-            Segment::Escaped(c) => Segment::Escaped(c),
-            Segment::Value(s) => Segment::Value(s.into()),
-        }
-    }
-}
-
 impl<'a> From<&'a Segment<String>> for Segment<&'a str> {
     fn from(value: &'a Segment<String>) -> Self {
         match value {
@@ -222,5 +209,11 @@ mod tests {
             .parse(b"a bunch of stuff{}{}{{}}.028millis: 1234.5,pos:-4.0,current:100,and a bunch of other stuff{}{}{{}}.028")
             .unwrap();
         assert_eq!(final_out, vec![1234.5, -4.0, 100.0]);
+    }
+
+    #[test]
+    fn command_success() {
+        let log_cmd = "temps_1 ,millis:{millis},PBT:{PBT} {{PBT0:{PBT0},PBT1:{PBT1}}}";
+        let _cmd = parse_logger.parse(log_cmd).unwrap();
     }
 }
