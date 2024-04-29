@@ -210,14 +210,15 @@ mod tests {
 
     #[test]
     fn conversion() {
-        let input = "millis: {millis},pos:{pos},current:{current}";
-        let borrowed_segments = parse_segments.parse(input).unwrap();
-        let owned_segments: Vec<_> = borrowed_segments
+        let input = ",millis:{millis},PBT:{PBT} {{PBT0:{PBT0},PBT1:{PBT1}}}";
+        let borrowed_segments: Vec<Segment<&str>> = parse_segments.parse(input).unwrap();
+        let owned_segments: Vec<Segment<String>> = borrowed_segments
             .clone()
             .into_iter()
             .map(Segment::into_owned)
             .collect();
-        let reborrowed_segments: Vec<_> = owned_segments.iter().map(Segment::to_borrowed).collect();
+        let reborrowed_segments: Vec<Segment<&str>> =
+            owned_segments.iter().map(Segment::to_borrowed).collect();
         assert_eq!(borrowed_segments, reborrowed_segments);
     }
 }

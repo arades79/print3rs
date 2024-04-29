@@ -283,4 +283,29 @@ mod test {
             }
         );
     }
+
+    #[test]
+    fn conversion() {
+        let borrowed = Connection::Mqtt {
+            hostname: "test",
+            port: None,
+            in_topic: Some("thing"),
+            out_topic: Some("thing2"),
+        };
+        let owned = borrowed.clone().into_owned();
+        assert_eq!(borrowed, owned.to_borrowed());
+    }
+
+    #[test]
+    fn command_parse() {
+        let input = "serial COM1 9600";
+        let command = parse_connection.parse(input).unwrap();
+        assert_eq!(
+            command,
+            Command::Connect(Connection::Serial {
+                port: "COM1",
+                baud: Some(9600)
+            })
+        );
+    }
 }

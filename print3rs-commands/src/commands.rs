@@ -40,7 +40,7 @@ pub fn identifier<'a>(input: &mut &'a str) -> PResult<&'a str> {
 }
 
 #[non_exhaustive]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Command<S> {
     Gcodes(Vec<S>),
     Print(S),
