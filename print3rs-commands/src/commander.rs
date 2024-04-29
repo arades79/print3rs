@@ -215,10 +215,10 @@ impl Commander {
                         self.add_printer_output_to_responses();
                     }
                     Connection::Mqtt {
-                        hostname,
-                        port,
-                        in_topic,
-                        out_topic,
+                        hostname: _,
+                        port: _,
+                        in_topic: _,
+                        out_topic: _,
                     } => todo!(),
                 };
             }

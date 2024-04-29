@@ -5,7 +5,7 @@ use {
         widget::column,
         window::{self, Action},
     },
-    print3rs_commands::commands,
+    print3rs_commands::{commander::Commander, commands},
     print3rs_core::Printer,
     std::sync::Arc,
 };
@@ -41,7 +41,7 @@ where
 pub(crate) struct App {
     pub(crate) ports: ComboState<String>,
     pub(crate) selected_port: Option<String>,
-    pub(crate) commander: commands::Commander,
+    pub(crate) commander: Commander,
     pub(crate) bauds: ComboState<u32>,
     pub(crate) selected_baud: Option<u32>,
     pub(crate) console: Console,

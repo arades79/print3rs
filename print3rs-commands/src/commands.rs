@@ -1,16 +1,12 @@
 use {
     self::{
         connect::Connection,
-        log::{get_headers, make_parser, parse_logger, Segment},
+        log::{parse_logger, Segment},
     },
     crate::commands::connect::parse_connection,
     core::borrow::Borrow,
-    print3rs_core::Socket,
     std::{
-        collections::HashMap,
         fmt::Debug,
-        sync::{Arc, Mutex},
-        time::{SystemTime, UNIX_EPOCH},
     },
     winnow::{
         ascii::digit1,
@@ -27,14 +23,10 @@ use winnow::{
     token::take_till,
 };
 
-use tokio::{
-    io::{AsyncWriteExt, BufReader},
-    net::TcpStream,
-    task::JoinHandle,
-};
 
-use print3rs_core::{Error as PrinterError, Printer};
-use tokio_serial::SerialPortBuilderExt;
+
+
+
 
 pub mod connect;
 pub mod help;
