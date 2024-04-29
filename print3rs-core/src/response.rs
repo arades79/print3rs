@@ -50,7 +50,7 @@ mod test {
 
     #[test]
     fn test_resend_response() {
-        let ok = ok_response.parse(b"Resend: 100").unwrap();
+        let ok = resend_response.parse(b"Resend: 100").unwrap();
         assert_eq!(ok, Response::Resend(Some(100)));
     }
 
