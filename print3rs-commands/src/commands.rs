@@ -5,9 +5,7 @@ use {
     },
     crate::commands::connect::parse_connection,
     core::borrow::Borrow,
-    std::{
-        fmt::Debug,
-    },
+    std::fmt::Debug,
     winnow::{
         ascii::digit1,
         combinator::terminated,
@@ -22,11 +20,6 @@ use winnow::{
     prelude::*,
     token::take_till,
 };
-
-
-
-
-
 
 pub mod connect;
 pub mod help;

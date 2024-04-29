@@ -66,7 +66,7 @@ impl Macros {
     pub fn expand<'a>(&self, codes: impl IntoIterator<Item = &'a str>) -> Vec<String> {
         let mut expanded = vec![];
         for code in codes {
-            match self.get(&code) {
+            match self.get(code) {
                 Some(expansion) => expanded.extend(expansion.iter().cloned()),
                 None => expanded.push(code.to_ascii_uppercase()),
             }

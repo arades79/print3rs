@@ -25,18 +25,6 @@ use crate::messages::{JogMove, Message};
 
 pub(crate) type AppElement<'a> = iced_aw::Element<'a, <App as iced::Application>::Message>;
 
-#[derive(Debug, Clone)]
-struct ErrorKindOf(String);
-
-impl<T> From<T> for ErrorKindOf
-where
-    T: ToString,
-{
-    fn from(value: T) -> Self {
-        Self(value.to_string())
-    }
-}
-
 #[derive(Debug)]
 pub(crate) struct App {
     pub(crate) ports: ComboState<String>,
