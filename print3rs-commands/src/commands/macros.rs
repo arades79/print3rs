@@ -80,7 +80,7 @@ mod test {
     use super::*;
 
     #[test]
-    fn macro_expansion() {
+    fn macro_storage() {
         let mut macros = Macros::new();
         macros.add("codes", ["G0", "G1", "G2"]).unwrap();
         macros.add("codes2", ["codes", "G100"]).unwrap();
@@ -88,6 +88,34 @@ mod test {
             macros.get("codes2").unwrap(),
             &vec!["G0", "G1", "G2", "G100"]
         );
+    }
+
+    #[test]
+    fn macro_expansion_empty() {
+        let macros = Macros::new();
+        let input = vec!["G0", "ONE", "G1"];
+        let output = macros.expand(input.clone());
+        assert_eq!(input, output)
+    }
+
+    #[test]
+    fn macro_expansion() {
+        let mut macros = Macros::new();
+        macros.add("one", ["step1", "step2"]).unwrap();
+        let output = macros.expand(["G0", "one", "G1"]);
+        assert_eq!(output, vec!["G0", "STEP1", "STEP2", "G1"]);
+    }
+
+    #[test]
+    fn iteration() {
+        let mut macros = Macros::new();
+        assert!(macros.iter().next().is_none());
+        macros.add("test", ["G0", "G1"]).unwrap();
+        let mut iter = macros.iter();
+        let (name, steps) = iter.next().unwrap();
+        assert_eq!(name, "TEST");
+        assert_eq!(steps, &["G0", "G1"]);
+        assert!(iter.next().is_none());
     }
 
     #[test]

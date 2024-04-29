@@ -230,7 +230,7 @@ impl Commander {
                 self.responder.send(help::help(subcommand).into())?;
             }
             Version => {
-                self.responder.send(version::version().into())?;
+                self.responder.send(version::VERSION.into())?;
             }
             _ => {
                 self.responder.send("Unsupported command!\n".into())?;
