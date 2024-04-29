@@ -1,4 +1,3 @@
-use crate::components::Console;
 use {
     crate::components,
     iced::{
@@ -10,6 +9,7 @@ use {
     print3rs_core::Printer,
     std::sync::Arc,
 };
+use {crate::components::Console, print3rs_commands::commands::connect::Connection};
 
 use iced::widget::combo_box::State as ComboState;
 use iced::Command;
@@ -120,17 +120,18 @@ impl iced::Application for App {
                         if let Err(msg) =
                             self.commander
                                 .dispatch(print3rs_commands::commands::Command::Connect(
-                                    print3rs_commands::commands::Connection::Auto,
+                                    Connection::Auto,
                                 ))
                         {
                             self.error_messages.push(msg.0);
                         }
-                    } else if let Err(msg) = self.commander.dispatch(commands::Command::Connect(
-                        commands::Connection::Serial {
-                            port: port.as_str(),
-                            baud: self.selected_baud,
-                        },
-                    )) {
+                    } else if let Err(msg) =
+                        self.commander
+                            .dispatch(commands::Command::Connect(Connection::Serial {
+                                port: port.as_str(),
+                                baud: self.selected_baud,
+                            }))
+                    {
                         self.error_messages.push(msg.0);
                     }
                 }

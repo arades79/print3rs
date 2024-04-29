@@ -35,11 +35,11 @@ use tokio::{
 use print3rs_core::{Error as PrinterError, Printer};
 use tokio_serial::SerialPortBuilderExt;
 
-mod connect;
-mod help;
-mod log;
-mod macros;
-mod version;
+pub mod connect;
+pub mod help;
+pub mod log;
+pub mod macros;
+pub mod version;
 
 pub fn identifier<'a>(input: &mut &'a str) -> PResult<&'a str> {
     const NAME_CHARS: (
