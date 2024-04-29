@@ -31,3 +31,36 @@ fn resend_response(input: &mut &[u8]) -> PResult<Response> {
 pub fn response(input: &mut &[u8]) -> PResult<Response> {
     alt((ok_response, resend_response)).parse_next(input)
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_ok_response() {
+        let ok = ok_response.parse(b"ok").unwrap();
+        assert_eq!(ok, Response::Ok(None));
+    }
+
+    #[test]
+    fn test_ok_num_response() {
+        let ok = ok_response.parse(b"ok: 100").unwrap();
+        assert_eq!(ok, Response::Ok(Some(100)));
+    }
+
+    #[test]
+    fn test_resend_response() {
+        let ok = ok_response.parse(b"Resend: 100").unwrap();
+        assert_eq!(ok, Response::Resend(Some(100)));
+    }
+
+    #[test]
+    fn test_response() {
+        let ok = response.parse(b"ok").unwrap();
+        assert_eq!(ok, Response::Ok(None));
+        let ok = response.parse(b"ok: 100").unwrap();
+        assert_eq!(ok, Response::Ok(Some(100)));
+        let ok = response.parse(b"Resend: 100").unwrap();
+        assert_eq!(ok, Response::Resend(Some(100)));
+    }
+}
