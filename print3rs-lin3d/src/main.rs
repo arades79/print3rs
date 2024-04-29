@@ -3,7 +3,7 @@
 //!
 
 use {
-    print3rs_commands::{commander::Commander, commands::version::version, response::Response},
+    print3rs_commands::{commander::Commander, commands::version::VERSION, response::Response},
     print3rs_core::Printer,
     std::{fmt::Debug, sync::Arc},
 };
@@ -57,7 +57,7 @@ async fn main() -> Result<(), AppError> {
 
     let (mut readline, mut writer) = Readline::new(prompt_string(commander.printer()))?;
 
-    writer.write_all(version().as_bytes()).await?;
+    writer.write_all(VERSION.as_bytes()).await?;
     writer
         .write_all(b"\ntype `help` for a list of commands\n")
         .await?;
