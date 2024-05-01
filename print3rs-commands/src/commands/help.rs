@@ -33,6 +33,7 @@ static CONNECT_HELP: &str = "connect: Manually connect to a printer by specifyin
 static DISCONNECT_HELP: &str = "disconnect: disconnect from the currently connected printer. All active tasks will be stopped\n";
 static MACRO_HELP: &str = "create a case-insensitve alias to some set of gcodes, even containing other macros recursively to build up complex sets of builds with a single word. Macro names cannot be a single uppercase letter followed by a number, e.g. H105, to avoid conflict with Gcodes. Names can have any mix of alphanumeric, -, ., and _ characters. Commands in a macro are separated by ';', and macros can be used anywhere Gcodes are passed, including repeat commands and sends.\n";
 
+/// Gives additional information about commands available or details for a specific command
 pub fn help(command: &str) -> &'static str {
     let command = command.trim();
 
