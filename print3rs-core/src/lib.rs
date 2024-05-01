@@ -19,7 +19,31 @@ use tokio::{
 pub type LineStream = broadcast::Receiver<Arc<str>>;
 
 #[derive(Debug)]
-struct SendContent(Box<[u8]>, Option<i32>, Option<oneshot::Sender<()>>);
+struct SendContent {
+    content: Box<[u8]>,
+    sequence: Option<i32>,
+    responder: Option<oneshot::Sender<()>>,
+}
+
+impl SendContent {
+    const fn new(
+        content: Box<[u8]>,
+        sequence: Option<i32>,
+        responder: Option<oneshot::Sender<()>>,
+    ) -> Self {
+        Self {
+            content,
+            sequence,
+            responder,
+        }
+    }
+}
+
+impl From<(Box<[u8]>, Option<i32>, Option<oneshot::Sender<()>>)> for SendContent {
+    fn from(value: (Box<[u8]>, Option<i32>, Option<oneshot::Sender<()>>)) -> Self {
+        SendContent::new(value.0, value.1, value.2)
+    }
+}
 
 #[derive(Debug)]
 pub struct Socket {
@@ -55,7 +79,7 @@ impl Socket {
         let send_slot = self.sender.reserve().await?;
         let (sequence, bytes) = self.serializer.serialize(gcode);
         let (responder, response) = oneshot::channel();
-        send_slot.send(SendContent(bytes, Some(sequence), Some(responder)));
+        send_slot.send(SendContent::new(bytes, Some(sequence), Some(responder)));
         let response = async { response.await.map_err(|_| Error::WontRespond) };
         Ok(response)
     }
@@ -68,7 +92,7 @@ impl Socket {
         let send_slot = self.sender.try_reserve()?;
         let (sequence, bytes) = self.serializer.serialize(gcode);
         let (responder, response) = oneshot::channel();
-        send_slot.send(SendContent(bytes, Some(sequence), Some(responder)));
+        send_slot.send(SendContent::new(bytes, Some(sequence), Some(responder)));
         let response = async { response.await.map_err(|_| Error::WontRespond) };
         Ok(response)
     }
@@ -87,7 +111,7 @@ impl Socket {
         let bytes = serialize_unsequenced(gcode);
         let (responder, response) = oneshot::channel();
         let send_slot = self.sender.reserve().await?;
-        send_slot.send(SendContent(bytes, None, Some(responder)));
+        send_slot.send(SendContent::new(bytes, None, Some(responder)));
         let response = async { response.await.map_err(|_| Error::WontRespond) };
         Ok(response)
     }
@@ -99,7 +123,7 @@ impl Socket {
         let bytes = serialize_unsequenced(gcode);
         let (responder, response) = oneshot::channel();
         let send_slot = self.sender.try_reserve()?;
-        send_slot.send(SendContent(bytes, None, Some(responder)));
+        send_slot.send(SendContent::new(bytes, None, Some(responder)));
         let response = async { response.await.map_err(|_| Error::WontRespond) };
         Ok(response)
     }
@@ -107,14 +131,22 @@ impl Socket {
     /// Send any raw sequence of bytes to the printer
     pub async fn send_raw(&self, gcode: &[u8]) -> Result<(), Error> {
         let sender = self.sender.reserve().await?;
-        sender.send(SendContent(gcode.to_owned().into_boxed_slice(), None, None));
+        sender.send(SendContent::new(
+            gcode.to_owned().into_boxed_slice(),
+            None,
+            None,
+        ));
         Ok(())
     }
 
     /// Send any raw sequence of bytes to the printer
     pub fn try_send_raw(&self, gcode: &[u8]) -> Result<(), Error> {
         let sender = self.sender.try_reserve()?;
-        sender.send(SendContent(gcode.to_owned().into_boxed_slice(), None, None));
+        sender.send(SendContent::new(
+            gcode.to_owned().into_boxed_slice(),
+            None,
+            None,
+        ));
         Ok(())
     }
 
@@ -158,6 +190,12 @@ impl Drop for Printer {
     }
 }
 
+impl PartialEq for Printer {
+    fn eq(&self, other: &Self) -> bool {
+        core::mem::discriminant(self) == core::mem::discriminant(other)
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("IO error: {0}")]
@@ -196,13 +234,13 @@ async fn printer_com_task(
     let mut pending_responses = BTreeMap::new();
     loop {
         tokio::select! {
-            Some(SendContent(line, sequence, responder)) = gcoderx.recv(), if pending_responses.len() < 4 => {
-                if transport.write_all(&line).await.is_err() {return;}
+            Some(SendContent{content, sequence, responder}) = gcoderx.recv(), if pending_responses.len() < 4 => {
+                if transport.write_all(&content).await.is_err() {return;}
                 if transport.flush().await.is_err() {return;}
-                tracing::debug!("Sent `{}` to printer", String::from_utf8_lossy(&line).trim());
+                tracing::debug!("Sent `{}` to printer", String::from_utf8_lossy(&content).trim());
                 if let Some(responder) = responder {
                     // dropping anything in slot, gives WontRespond error
-                    pending_responses.insert(sequence, (responder, line));
+                    pending_responses.insert(sequence, (responder, content));
                 }
             },
             Ok(1..) = transport.read_line(&mut buf) => {
@@ -387,5 +425,40 @@ impl From<&Printer> for Option<Socket> {
 impl<'a> From<&'a Printer> for Option<&'a Socket> {
     fn from(value: &'a Printer) -> Self {
         value.socket().ok()
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn disconnected_is_disconnected() {
+        let mut disconnected = Printer::Disconnected;
+
+        assert!(matches!(
+            disconnected.try_send(()),
+            Err(Error::Disconnected)
+        ));
+
+        assert!(matches!(
+            disconnected.try_send_raw(b""),
+            Err(Error::Disconnected)
+        ));
+
+        assert!(matches!(
+            disconnected.try_read_next_line(),
+            Err(Error::Disconnected)
+        ));
+
+        assert!(matches!(disconnected.socket(), Err(Error::Disconnected)));
+    }
+
+    #[test]
+    fn conversion() {
+        let disconnected: Printer = None.into();
+        assert!(!disconnected.is_connected());
+        let maybe_socket: Option<&Socket> = (&disconnected).into();
+        assert!(maybe_socket.is_none());
     }
 }

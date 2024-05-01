@@ -1,4 +1,3 @@
-use crate::components::Console;
 use {
     crate::components,
     iced::{
@@ -6,10 +5,11 @@ use {
         widget::column,
         window::{self, Action},
     },
-    print3rs_commands::commands,
+    print3rs_commands::{commander::Commander, commands},
     print3rs_core::Printer,
     std::sync::Arc,
 };
+use {crate::components::Console, print3rs_commands::commands::connect::Connection};
 
 use iced::widget::combo_box::State as ComboState;
 use iced::Command;
@@ -25,23 +25,11 @@ use crate::messages::{JogMove, Message};
 
 pub(crate) type AppElement<'a> = iced_aw::Element<'a, <App as iced::Application>::Message>;
 
-#[derive(Debug, Clone)]
-struct ErrorKindOf(String);
-
-impl<T> From<T> for ErrorKindOf
-where
-    T: ToString,
-{
-    fn from(value: T) -> Self {
-        Self(value.to_string())
-    }
-}
-
 #[derive(Debug)]
 pub(crate) struct App {
     pub(crate) ports: ComboState<String>,
     pub(crate) selected_port: Option<String>,
-    pub(crate) commander: commands::Commander,
+    pub(crate) commander: Commander,
     pub(crate) bauds: ComboState<u32>,
     pub(crate) selected_baud: Option<u32>,
     pub(crate) console: Console,
@@ -120,17 +108,18 @@ impl iced::Application for App {
                         if let Err(msg) =
                             self.commander
                                 .dispatch(print3rs_commands::commands::Command::Connect(
-                                    print3rs_commands::commands::Connection::Auto,
+                                    Connection::Auto,
                                 ))
                         {
                             self.error_messages.push(msg.0);
                         }
-                    } else if let Err(msg) = self.commander.dispatch(commands::Command::Connect(
-                        commands::Connection::Serial {
-                            port: port.as_str(),
-                            baud: self.selected_baud,
-                        },
-                    )) {
+                    } else if let Err(msg) =
+                        self.commander
+                            .dispatch(commands::Command::Connect(Connection::Serial {
+                                port: port.as_str(),
+                                baud: self.selected_baud,
+                            }))
+                    {
                         self.error_messages.push(msg.0);
                     }
                 }

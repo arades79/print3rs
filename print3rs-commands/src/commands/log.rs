@@ -1,5 +1,5 @@
 use winnow::{
-    ascii::{alphanumeric1, float, space1},
+    ascii::{float, space1},
     combinator::{alt, delimited, dispatch, empty, fail, preceded, repeat, rest},
     prelude::*,
     stream::AsChar,
@@ -11,17 +11,17 @@ use {
     winnow::ascii::space0,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Segment<S> {
     Tag(S),
     Escaped(char),
     Value(S),
 }
 
-impl<S> Segment<S> {
-    pub fn to_borrowed<B: ?Sized>(&self) -> Segment<&B>
+impl Segment<String> {
+    pub fn to_borrowed<Borrowed: ?Sized>(&self) -> Segment<&Borrowed>
     where
-        S: Borrow<B>,
+        String: Borrow<Borrowed>,
     {
         match self {
             Segment::Tag(s) => Segment::Tag(s.borrow()),
@@ -31,35 +31,12 @@ impl<S> Segment<S> {
     }
 }
 
-impl<'a> From<Segment<&'a str>> for Segment<String> {
-    fn from(value: Segment<&'a str>) -> Self {
-        match value {
-            Segment::Tag(s) => Segment::Tag(s.to_string()),
+impl<'a> Segment<&'a str> {
+    pub fn into_owned(self) -> Segment<String> {
+        match self {
+            Segment::Tag(s) => Segment::Tag(s.to_owned()),
             Segment::Escaped(c) => Segment::Escaped(c),
-            Segment::Value(s) => Segment::Value(s.to_string()),
-        }
-    }
-}
-
-impl<'a, S: ?Sized> From<Segment<&'a S>> for Segment<Box<S>>
-where
-    Box<S>: From<&'a S>,
-{
-    fn from(value: Segment<&'a S>) -> Self {
-        match value {
-            Segment::Tag(s) => Segment::Tag(s.into()),
-            Segment::Escaped(c) => Segment::Escaped(c),
-            Segment::Value(s) => Segment::Value(s.into()),
-        }
-    }
-}
-
-impl<'a> From<&'a Segment<String>> for Segment<&'a str> {
-    fn from(value: &'a Segment<String>) -> Self {
-        match value {
-            Segment::Tag(s) => Segment::Tag(s.as_ref()),
-            Segment::Escaped(c) => Segment::Escaped(*c),
-            Segment::Value(s) => Segment::Value(s.as_ref()),
+            Segment::Value(s) => Segment::Value(s.to_owned()),
         }
     }
 }
@@ -100,11 +77,12 @@ pub fn parse_logger<'a>(input: &mut &'a str) -> PResult<Command<&'a str>> {
         .parse_next(input)
 }
 
-pub fn make_parser(segments: Vec<Segment<&'_ str>>) -> impl FnMut(&mut &[u8]) -> PResult<Vec<f32>> {
-    let segments = segments
-        .into_iter()
-        .map(|segment| segment.into())
-        .collect::<Vec<Segment<String>>>();
+pub fn make_parser(segments: Vec<Segment<&str>>) -> impl FnMut(&mut &[u8]) -> PResult<Vec<f32>> {
+    let mut owned_segments = Vec::new();
+    for segment in segments {
+        owned_segments.push(segment.into_owned());
+    }
+    let segments = owned_segments;
     move |input: &mut &[u8]| -> PResult<Vec<f32>> {
         let mut values = vec![];
 
@@ -222,5 +200,25 @@ mod tests {
             .parse(b"a bunch of stuff{}{}{{}}.028millis: 1234.5,pos:-4.0,current:100,and a bunch of other stuff{}{}{{}}.028")
             .unwrap();
         assert_eq!(final_out, vec![1234.5, -4.0, 100.0]);
+    }
+
+    #[test]
+    fn command_success() {
+        let log_cmd = "temps_1 ,millis:{millis},PBT:{PBT} {{PBT0:{PBT0},PBT1:{PBT1}}}";
+        let _cmd = parse_logger.parse(log_cmd).unwrap();
+    }
+
+    #[test]
+    fn conversion() {
+        let input = ",millis:{millis},PBT:{PBT} {{PBT0:{PBT0},PBT1:{PBT1}}}";
+        let borrowed_segments: Vec<Segment<&str>> = parse_segments.parse(input).unwrap();
+        let owned_segments: Vec<Segment<String>> = borrowed_segments
+            .clone()
+            .into_iter()
+            .map(Segment::into_owned)
+            .collect();
+        let reborrowed_segments: Vec<Segment<&str>> =
+            owned_segments.iter().map(Segment::to_borrowed).collect();
+        assert_eq!(borrowed_segments, reborrowed_segments);
     }
 }

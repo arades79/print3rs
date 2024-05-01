@@ -1,5 +1,5 @@
 use {
-    print3rs_commands::commands::{Command, Response},
+    print3rs_commands::{commands::Command, response::Response},
     print3rs_core::Printer,
     std::{
         path::PathBuf,

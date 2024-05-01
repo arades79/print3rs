@@ -3,6 +3,7 @@
 //!
 
 use {
+    print3rs_commands::{commander::Commander, commands::version::VERSION, response::Response},
     print3rs_core::Printer,
     std::{fmt::Debug, sync::Arc},
 };
@@ -52,11 +53,11 @@ fn setup_logging(writer: SharedWriter) {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), AppError> {
-    let mut commander = commands::Commander::new();
+    let mut commander = Commander::new();
 
     let (mut readline, mut writer) = Readline::new(prompt_string(commander.printer()))?;
 
-    writer.write_all(commands::version().as_bytes()).await?;
+    writer.write_all(VERSION.as_bytes()).await?;
     writer
         .write_all(b"\ntype `help` for a list of commands\n")
         .await?;
@@ -68,19 +69,19 @@ async fn main() -> Result<(), AppError> {
         tokio::select! {
             Ok(response) = responses.recv() => {
                 match response {
-                    commands::Response::Output(s) => {
+                    Response::Output(s) => {
                         writer.write_all(s.as_bytes()).await?;
                     },
-                    commands::Response::Error(e) => {
+                    Response::Error(e) => {
                         writer.write_all(format!("Error: {}", e.0).as_bytes()).await?;
                     },
-                    commands::Response::AutoConnect(a_printer) => {
+                    Response::AutoConnect(a_printer) => {
                         commander.set_printer(Arc::into_inner(a_printer).unwrap_or_default().into_inner().unwrap_or_default());
                     },
-                    commands::Response::Clear => {
+                    Response::Clear => {
                         readline.clear()?;
                     },
-                    commands::Response::Quit => {
+                    Response::Quit => {
                         readline.flush()?;
                         return Ok(());
                     },
