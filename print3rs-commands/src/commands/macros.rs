@@ -16,23 +16,24 @@ impl Macros {
         Self(MacrosInner::new())
     }
 
-    /// Add a new macro, stores the expansion
+    /// Add a new macro with case insensitive name, stores the expansion.
+    /// Errors if the expansion would infinitely recurse
+    /// Returns existing expansion if one with the same name existed
     pub fn add<'a>(
         &mut self,
         name: &str,
         steps: impl IntoIterator<Item = &'a str>,
-    ) -> Result<(), InfiniteRecursion> {
+    ) -> Result<Option<Vec<String>>, InfiniteRecursion> {
         let commands = self.expand_for_insertion(steps)?;
-        self.0.insert(name.to_ascii_uppercase(), commands);
-        Ok(())
+        Ok(self.0.insert(name.to_ascii_uppercase(), commands))
     }
 
-    /// Lookup a macro by name, return its expansion if defined
+    /// Lookup a macro by case insensitive name, return its expansion if defined
     pub fn get(&self, name: &str) -> Option<&Vec<String>> {
         self.0.get(&name.to_ascii_uppercase())
     }
 
-    /// Remove a macro by name.
+    /// Remove a macro by case insensitive name.
     /// If a macro with the same name existed, the previous expansion is returned.
     pub fn remove(&mut self, name: &str) -> Option<Vec<String>> {
         self.0.remove(&name.to_ascii_uppercase())
