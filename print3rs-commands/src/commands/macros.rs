@@ -7,7 +7,7 @@ type MacrosInner = HashMap<String, Vec<String>>;
 
 /// Holder for G code macros.
 /// Handles storage, lookup and expansion.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct Macros(MacrosInner);
 
 impl Macros {
