@@ -4,6 +4,8 @@ use {
     std::sync::{Arc, Mutex},
 };
 
+/// Cheaply cloned 'return' of any asynchronous operations triggered by commander.
+/// These are propogated to all subscribers to allow distributed logic for handling responses.
 #[derive(Debug, Clone)]
 pub enum Response {
     Output(Arc<str>),

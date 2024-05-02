@@ -2,7 +2,7 @@ use {
     super::Command,
     print3rs_core::Printer,
     std::{borrow::Borrow, time::Duration},
-    tokio::{io::BufReader, time::timeout},
+    tokio::{io::BufReader, time::sleep, time::timeout},
     tokio_serial::{available_ports, SerialPort, SerialPortBuilderExt, SerialPortInfo},
     winnow::{
         ascii::{alpha0, dec_uint, space0},
@@ -22,12 +22,11 @@ pub async fn auto_connect() -> Printer {
         printer_port.write_data_terminal_ready(true).ok()?;
         let printer = Printer::new(BufReader::new(printer_port));
 
+        sleep(Duration::from_secs(1)).await;
+
         let look_for_ok = printer.send_unsequenced(b"M115\n").await.ok()?;
 
-        if timeout(Duration::from_secs(5), look_for_ok)
-            .await
-            .is_ok_and(|inner| inner.is_ok())
-        {
+        if timeout(Duration::from_secs(5), look_for_ok).await.is_ok() {
             Some(printer)
         } else {
             None

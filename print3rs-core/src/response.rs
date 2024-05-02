@@ -1,5 +1,5 @@
 use winnow::{
-    ascii::{dec_int, multispace0, space0},
+    ascii::{dec_int, multispace0, space0, Caseless},
     combinator::{alt, opt, preceded, terminated},
     prelude::*,
 };
@@ -12,7 +12,7 @@ pub enum Response {
 
 fn ok_response(input: &mut &[u8]) -> PResult<Response> {
     preceded(
-        (space0, "ok", opt(":"), space0, opt(b'N')),
+        (space0, Caseless("ok"), opt(":"), space0, opt(b'N')),
         terminated(opt(dec_int), multispace0),
     )
     .map(Response::Ok)
@@ -21,7 +21,7 @@ fn ok_response(input: &mut &[u8]) -> PResult<Response> {
 
 fn resend_response(input: &mut &[u8]) -> PResult<Response> {
     preceded(
-        (space0, "Resend:", space0),
+        (space0, Caseless("Resend:"), space0),
         terminated(opt(dec_int), multispace0),
     )
     .map(Response::Resend)

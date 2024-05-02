@@ -87,7 +87,7 @@ pub fn start_logging(
 pub fn start_repeat(gcodes: Vec<String>, socket: Socket) -> BackgroundTask {
     let task: JoinHandle<Result<(), TaskError>> = tokio::spawn(async move {
         for ref line in gcodes.into_iter().cycle() {
-            socket.send(line).await?.await?;
+            let _ = socket.send_unsequenced(line).await?.await;
         }
         Ok(())
     });
@@ -117,7 +117,7 @@ impl Drop for BackgroundTask {
 pub fn send_gcodes(socket: Socket, codes: Vec<String>) -> BackgroundTask {
     let task: JoinHandle<Result<(), PrinterError>> = tokio::spawn(async move {
         for code in codes {
-            socket.send(code).await?.await?;
+            let _ = socket.send_unsequenced(code).await?.await;
         }
         Ok(())
     });
