@@ -3,6 +3,7 @@ use std::{collections::BTreeMap, fmt::Debug, future::Future, sync::Arc};
 use serde::Serialize;
 use winnow::Parser;
 
+mod info;
 mod response;
 
 use response::response;
