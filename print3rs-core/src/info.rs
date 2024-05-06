@@ -121,4 +121,20 @@ mod test {
         assert!(!Info::Str(Default::default()).is_true());
         assert!(bool::from(Info::Float(6.9)));
     }
+
+    #[test]
+    fn map_conversion() {
+        let mut map = InfoMapInner::new();
+        map.insert("test".to_string(), Info::Key);
+        let og = map.clone();
+        let converted: InfoMap = map.into();
+        assert_eq!(converted.deref(), &og);
+        assert_eq!(og, converted.into())
+    }
+
+    #[test]
+    fn info_conversion() {
+        let cap = Capability::AutoreportPos;
+        assert_eq!(cap.as_ref(), "AUTOREPORT_POS");
+    }
 }
