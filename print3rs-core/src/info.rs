@@ -21,7 +21,7 @@ impl Info {
         match self {
             Info::Key => true,
             Info::Int(1..) => true,
-            Info::Float(f) if f > &0.0 => true,
+            Info::Float(f) if *f > 0.0 => true,
             Info::Bool(true) => true,
             Info::Str(s) if !s.is_empty() => true,
             _ => false,
