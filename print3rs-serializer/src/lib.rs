@@ -511,4 +511,34 @@ mod test {
         let expected: &[u8] = b"N3G1234X-1Y2.3*12\n";
         assert_eq!(out.1.as_ref(), expected);
     }
+
+    #[test]
+    fn counter_set() {
+        let sequenced = Sequenced::new();
+        let (seq, _) = sequenced.serialize("doesn't");
+        assert_eq!(seq, 1);
+        let (seq, _) = sequenced.serialize("matter");
+        assert_eq!(seq, 2);
+
+        sequenced.set_sequence(1000);
+
+        let (seq, _) = sequenced.serialize("doesn't");
+        assert_eq!(seq, 1000);
+        let (seq, _) = sequenced.serialize("matter");
+        assert_eq!(seq, 1001);
+    }
+
+    #[test]
+    fn data_model() {
+        #[derive(Debug, Serialize, Default)]
+        struct Test {
+            tup: (i8, i16, i32, i64),
+            arr: [u64; 5],
+            map: std::collections::HashMap<String, u16>,
+        }
+        let mut test = Test::default();
+        test.map.insert("test".to_string(), 65535u16);
+        let out = serialize_unsequenced(test);
+        assert_eq!(*b"TestT0000A00000Mtest65535\n", *out);
+    }
 }
