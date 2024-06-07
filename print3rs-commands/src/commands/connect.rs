@@ -69,6 +69,18 @@ pub enum Connection<S> {
     },
 }
 
+impl<T> Connection<T> {
+    /// Name of the protocol being used
+    pub fn protocol(&self) -> &str {
+        match self {
+            Connection::Auto => "Auto",
+            Connection::Serial { .. } => "Serial",
+            Connection::Tcp { .. } => "TCP/IP",
+            Connection::Mqtt { .. } => "Mqtt",
+        }
+    }
+}
+
 impl<'a> Connection<&'a str> {
     /// convert any inner borrowed data into owned
     pub fn into_owned(self) -> Connection<String> {
