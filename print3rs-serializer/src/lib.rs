@@ -5,8 +5,10 @@ use serde::{
 
 use std::sync::{atomic::AtomicI32 as Ai32, atomic::Ordering, Arc};
 
+/// Default start point for new sequencers
 pub const SEQUENCE_START: i32 = 1;
 
+/// An automatically sequenced serializer that can be cloned and sent between threads while guaranteeing strict sequence
 #[derive(Debug, Clone)]
 pub struct Sequenced {
     sequence: Arc<Ai32>,
@@ -20,6 +22,7 @@ impl Default for Sequenced {
     }
 }
 
+/// Serialize anything, provides no sequencing, thus no traceability
 pub fn serialize_unsequenced(t: impl Serialize) -> Box<[u8]> {
     let mut line = GcodeLine::new();
     line.serialize(t);
@@ -481,13 +484,11 @@ mod test {
     #[test]
     fn unit_serialize_works() {
         let writer = Sequenced::default();
-        let out = writer.serialize_unsequenced(M1234);
-        let expected: &[u8] = b"M1234\n";
-        assert_eq!(out.as_ref(), expected);
-
-        let out = writer.serialize(G1234 { x: -1, y: 2.3 });
-        let expected: &[u8] = b"N1G1234X-1Y2.3*14\n";
-        assert_eq!(out.1.as_ref(), expected);
+        assert_eq!(*writer.serialize_unsequenced(M1234), *b"M1234\n");
+        assert_eq!(
+            *writer.serialize(G1234 { x: -1, y: 2.3 }).1,
+            *b"N1G1234X-1Y2.3*14\n"
+        );
     }
 
     #[test]
@@ -495,20 +496,76 @@ mod test {
         let writer1 = Sequenced::default();
         let writer2 = writer1.clone();
 
-        let out = writer1.serialize(G1234 { x: -1, y: 2.3 });
-        let expected: &[u8] = b"N1G1234X-1Y2.3*14\n";
-        assert_eq!(out.1.as_ref(), expected);
+        assert_eq!(
+            *writer1.serialize(G1234 { x: -1, y: 2.3 }).1,
+            *b"N1G1234X-1Y2.3*14\n"
+        );
 
         std::thread::spawn(move || {
-            let out = writer2.serialize(G1234 { x: -1, y: 2.3 });
-            let expected: &[u8] = b"N2G1234X-1Y2.3*13\n";
-            assert_eq!(out.1.as_ref(), expected);
+            assert_eq!(
+                *writer2.serialize(G1234 { x: -1, y: 2.3 }).1,
+                *b"N2G1234X-1Y2.3*13\n"
+            );
         })
         .join()
         .unwrap();
 
-        let out = writer1.serialize(G1234 { x: -1, y: 2.3 });
-        let expected: &[u8] = b"N3G1234X-1Y2.3*12\n";
-        assert_eq!(out.1.as_ref(), expected);
+        assert_eq!(
+            *writer1.serialize(G1234 { x: -1, y: 2.3 }).1,
+            *b"N3G1234X-1Y2.3*12\n"
+        );
+    }
+
+    #[test]
+    fn counter_set() {
+        let sequenced = Sequenced::new();
+        let (seq, _) = sequenced.serialize("doesn't");
+        assert_eq!(seq, 1);
+        let (seq, _) = sequenced.serialize("matter");
+        assert_eq!(seq, 2);
+
+        sequenced.set_sequence(1000);
+
+        let (seq, _) = sequenced.serialize("doesn't");
+        assert_eq!(seq, 1000);
+        let (seq, _) = sequenced.serialize("matter");
+        assert_eq!(seq, 1001);
+    }
+
+    #[test]
+    fn data_model() {
+        #[derive(Debug, Default, Serialize)]
+        enum TestEnum {
+            #[default]
+            One,
+            Two(u32),
+            Three {
+                x: u16,
+            },
+        }
+        #[derive(Debug, Serialize, Default)]
+        struct Test {
+            tuple: (i8, i16, i32, i64),
+            array: [u64; 5],
+            map: std::collections::HashMap<String, u16>,
+            maybe: Option<()>,
+            enumeration: TestEnum,
+        }
+        let mut test = Test::default();
+        test.map.insert("test".to_string(), 65535u16);
+        assert_eq!(
+            *b"TestT0000A00000Mtest65535MEOne\n",
+            *serialize_unsequenced(test)
+        );
+        assert_eq!(*b"0\n", *serialize_unsequenced(TestEnum::Two(0)));
+        assert_eq!(
+            *b"ThreeX0\n",
+            *serialize_unsequenced(TestEnum::Three { x: 0 })
+        );
+        assert_eq!(*b"0.0\n", *serialize_unsequenced(0.0));
+        assert_eq!(*b"0\n", *serialize_unsequenced(false));
+        assert_eq!(*b"1\n", *serialize_unsequenced(Option::from(1u8)));
+        assert_eq!(*b"0.0\n", *serialize_unsequenced(0.0));
+        //assert_eq!(*b"test\n", *serialize_unsequenced(b"test"));
     }
 }

@@ -3,6 +3,7 @@ use std::{collections::BTreeMap, fmt::Debug, future::Future, sync::Arc};
 use serde::Serialize;
 use winnow::Parser;
 
+mod info;
 mod response;
 
 use response::response;
@@ -84,6 +85,9 @@ impl Socket {
         Ok(response)
     }
 
+    /// Serialize and attempt sending payload to connected device.
+    ///
+    /// Non-blocking non-async implementation, returns with an error if a wait would occur
     #[tracing::instrument(level = "debug", skip(self))]
     pub fn try_send(
         &self,
@@ -116,6 +120,9 @@ impl Socket {
         Ok(response)
     }
 
+    /// Non-blocking non-async version of `send_unsequenced`, see that method for usage
+    ///
+    /// Where `send_unsequenced` would wait, this method returns an error
     pub fn try_send_unsequenced(
         &self,
         gcode: impl Serialize + Debug,
@@ -160,6 +167,9 @@ impl Socket {
         Ok(line)
     }
 
+    /// See `read_next_line`
+    ///
+    /// Where that method would await, this will return immediately with an error.
     pub fn try_read_next_line(&mut self) -> Result<Arc<str>, Error> {
         let line = self.responses.try_recv()?;
         Ok(line)
@@ -320,6 +330,7 @@ impl Printer {
         core::mem::take(self);
     }
 
+    /// Check if there is an active connection, convenience method for testing enum state.
     pub fn is_connected(&self) -> bool {
         match self {
             Printer::Disconnected => false,
@@ -327,6 +338,7 @@ impl Printer {
         }
     }
 
+    /// Get a handle to background processing task if one is active.
     pub fn background_task(&self) -> Option<&JoinHandle<()>> {
         match self {
             Printer::Disconnected => None,
@@ -350,6 +362,7 @@ impl Printer {
         self.socket()?.send(gcode).await
     }
 
+    /// Non blocking, non-async version of `send`, instantly returns an error where that method would wait
     #[tracing::instrument(level = "debug", skip(self))]
     pub fn try_send(
         &self,
@@ -372,6 +385,7 @@ impl Printer {
         self.socket()?.send_unsequenced(gcode).await
     }
 
+    /// Non blocking, non-async version of `send_unsequenced`, instantly returns an error where that method would wait
     pub fn try_send_unsequenced(
         &self,
         gcode: impl Serialize + Debug,
@@ -384,6 +398,7 @@ impl Printer {
         self.socket()?.send_raw(gcode).await
     }
 
+    /// Non blocking, non-async version of `send_raw`, instantly returns an error where that method would wait
     pub fn try_send_raw(&self, gcode: &[u8]) -> Result<(), Error> {
         self.socket()?.try_send_raw(gcode)
     }
@@ -397,6 +412,7 @@ impl Printer {
         self.socket_mut()?.read_next_line().await
     }
 
+    /// Non blocking, non-async version of `read_next_line`, instantly returns an error where that method would wait
     pub fn try_read_next_line(&mut self) -> Result<Arc<str>, Error> {
         self.socket_mut()?.try_read_next_line()
     }

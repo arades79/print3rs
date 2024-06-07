@@ -2,31 +2,48 @@ use std::collections::HashMap;
 
 #[derive(Debug)]
 pub struct InfiniteRecursion;
+
 type MacrosInner = HashMap<String, Vec<String>>;
-#[derive(Debug, Default)]
+
+/// Holder for G code macros.
+/// Handles storage, lookup and expansion.
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct Macros(MacrosInner);
+
 impl Macros {
+    /// Empty holder
     pub fn new() -> Self {
         Self(MacrosInner::new())
     }
+
+    /// Add a new macro with case insensitive name, stores the expansion.
+    /// Errors if the expansion would infinitely recurse
+    /// Returns existing expansion if one with the same name existed
     pub fn add<'a>(
         &mut self,
         name: &str,
         steps: impl IntoIterator<Item = &'a str>,
-    ) -> Result<(), InfiniteRecursion> {
+    ) -> Result<Option<Vec<String>>, InfiniteRecursion> {
         let commands = self.expand_for_insertion(steps)?;
-        self.0.insert(name.to_ascii_uppercase(), commands);
-        Ok(())
+        Ok(self.0.insert(name.to_ascii_uppercase(), commands))
     }
+
+    /// Lookup a macro by case insensitive name, return its expansion if defined
     pub fn get(&self, name: &str) -> Option<&Vec<String>> {
         self.0.get(&name.to_ascii_uppercase())
     }
+
+    /// Remove a macro by case insensitive name.
+    /// If a macro with the same name existed, the previous expansion is returned.
     pub fn remove(&mut self, name: &str) -> Option<Vec<String>> {
         self.0.remove(&name.to_ascii_uppercase())
     }
+
+    /// Iterate (name, expansions) stored
     pub fn iter(&self) -> std::collections::hash_map::Iter<'_, String, Vec<String>> {
         self.0.iter()
     }
+
     fn expand_recursive(
         &self,
         expanded: &mut Vec<String>,
@@ -49,6 +66,7 @@ impl Macros {
         };
         Ok(())
     }
+
     /// recursively expand all in input sequence before placing into internal map
     /// placing recursion here eliminates possibility of infinite recursion
     fn expand_for_insertion(
@@ -63,6 +81,7 @@ impl Macros {
         Ok(expanded)
     }
 
+    /// Given a list of Gcodes and/or macros, replace any defined macros in the sequence with its expansion.
     pub fn expand<'a>(&self, codes: impl IntoIterator<Item = &'a str>) -> Vec<String> {
         let mut expanded = vec![];
         for code in codes {

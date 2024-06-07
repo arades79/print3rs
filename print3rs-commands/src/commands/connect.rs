@@ -2,7 +2,7 @@ use {
     super::Command,
     print3rs_core::Printer,
     std::{borrow::Borrow, time::Duration},
-    tokio::{io::BufReader, time::timeout},
+    tokio::{io::BufReader, time::sleep, time::timeout},
     tokio_serial::{available_ports, SerialPort, SerialPortBuilderExt, SerialPortInfo},
     winnow::{
         ascii::{alpha0, dec_uint, space0},
@@ -12,6 +12,10 @@ use {
     },
 };
 
+/// Attempt to enumerate and establish a connection to a device,
+/// connecting and returning to said device if any were successful.
+///
+/// If no valid device is found, return a disconnected device.
 pub async fn auto_connect() -> Printer {
     async fn check_port(port: SerialPortInfo) -> Option<Printer> {
         tracing::debug!("checking port {}...", port.port_name);
@@ -22,12 +26,11 @@ pub async fn auto_connect() -> Printer {
         printer_port.write_data_terminal_ready(true).ok()?;
         let printer = Printer::new(BufReader::new(printer_port));
 
+        sleep(Duration::from_secs(1)).await;
+
         let look_for_ok = printer.send_unsequenced(b"M115\n").await.ok()?;
 
-        if timeout(Duration::from_secs(5), look_for_ok)
-            .await
-            .is_ok_and(|inner| inner.is_ok())
-        {
+        if timeout(Duration::from_secs(5), look_for_ok).await.is_ok() {
             Some(printer)
         } else {
             None
@@ -44,6 +47,7 @@ pub async fn auto_connect() -> Printer {
     Printer::Disconnected
 }
 
+/// Underlying protocol used to establish communication to device.
 #[non_exhaustive]
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub enum Connection<S> {
@@ -65,7 +69,20 @@ pub enum Connection<S> {
     },
 }
 
+impl<T> Connection<T> {
+    /// Name of the protocol being used
+    pub fn protocol(&self) -> &str {
+        match self {
+            Connection::Auto => "Auto",
+            Connection::Serial { .. } => "Serial",
+            Connection::Tcp { .. } => "TCP/IP",
+            Connection::Mqtt { .. } => "Mqtt",
+        }
+    }
+}
+
 impl<'a> Connection<&'a str> {
+    /// convert any inner borrowed data into owned
     pub fn into_owned(self) -> Connection<String> {
         match self {
             Connection::Auto => Connection::Auto,
@@ -92,6 +109,7 @@ impl<'a> Connection<&'a str> {
     }
 }
 impl Connection<String> {
+    /// Get a borrow to any owned data.
     pub fn to_borrowed<Borrowed: ?Sized>(&self) -> Connection<&Borrowed>
     where
         String: Borrow<Borrowed>,
@@ -161,6 +179,7 @@ fn parse_mqtt_connection<'a>(input: &mut &'a str) -> PResult<Connection<&'a str>
     })
 }
 
+/// Parse connection details from a string, for any known protocol
 pub fn parse_connection<'a>(input: &mut &'a str) -> PResult<Command<&'a str>> {
     let connection = dispatch! { preceded(space0, alpha0);
         "serial" => parse_serial_connection,

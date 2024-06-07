@@ -1,0 +1,1 @@
+ cargo llvm-cov nextest --workspace --exclude lin3d --exclude host3d --open

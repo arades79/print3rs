@@ -9,6 +9,7 @@ use {
     winnow::Parser,
 };
 
+/// Starts a background task which reads a .gcode file and sends the commands in sequence
 pub fn start_print_file(filename: &str, socket: Socket) -> BackgroundTask {
     let filename = filename.to_owned();
     let task: JoinHandle<Result<(), TaskError>> = tokio::spawn(async move {
@@ -40,6 +41,7 @@ enum TaskError {
     Join(#[from] tokio::task::JoinError),
 }
 
+/// Starts a background task which listens for a pattern an writes it in a file
 pub fn start_logging(
     name: &str,
     pattern: Vec<Segment<&'_ str>>,
@@ -81,10 +83,11 @@ pub fn start_logging(
     })
 }
 
+/// Starts a background task sending Gcodes one-at-a-time in an infinite loop
 pub fn start_repeat(gcodes: Vec<String>, socket: Socket) -> BackgroundTask {
     let task: JoinHandle<Result<(), TaskError>> = tokio::spawn(async move {
         for ref line in gcodes.into_iter().cycle() {
-            socket.send(line).await?.await?;
+            let _ = socket.send_unsequenced(line).await?.await;
         }
         Ok(())
     });
@@ -96,6 +99,8 @@ pub fn start_repeat(gcodes: Vec<String>, socket: Socket) -> BackgroundTask {
 
 pub type Tasks = HashMap<String, BackgroundTask>;
 
+/// Handle for a concurrent task with description.
+/// Task is cancelled on drop.
 #[derive(Debug)]
 pub struct BackgroundTask {
     pub description: &'static str,
@@ -108,10 +113,11 @@ impl Drop for BackgroundTask {
     }
 }
 
+/// Starts a background task which sends given Gcodes one-at-a-time
 pub fn send_gcodes(socket: Socket, codes: Vec<String>) -> BackgroundTask {
     let task: JoinHandle<Result<(), PrinterError>> = tokio::spawn(async move {
         for code in codes {
-            socket.send_unsequenced(code.as_str()).await?.await?;
+            let _ = socket.send_unsequenced(code).await?.await;
         }
         Ok(())
     });
