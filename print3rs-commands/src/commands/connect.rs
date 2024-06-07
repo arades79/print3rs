@@ -12,6 +12,10 @@ use {
     },
 };
 
+/// Attempt to enumerate and establish a connection to a device,
+/// connecting and returning to said device if any were successful.
+///
+/// If no valid device is found, return a disconnected device.
 pub async fn auto_connect() -> Printer {
     async fn check_port(port: SerialPortInfo) -> Option<Printer> {
         tracing::debug!("checking port {}...", port.port_name);
@@ -43,6 +47,7 @@ pub async fn auto_connect() -> Printer {
     Printer::Disconnected
 }
 
+/// Underlying protocol used to establish communication to device.
 #[non_exhaustive]
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub enum Connection<S> {
@@ -65,6 +70,7 @@ pub enum Connection<S> {
 }
 
 impl<'a> Connection<&'a str> {
+    /// convert any inner borrowed data into owned
     pub fn into_owned(self) -> Connection<String> {
         match self {
             Connection::Auto => Connection::Auto,
@@ -91,6 +97,7 @@ impl<'a> Connection<&'a str> {
     }
 }
 impl Connection<String> {
+    /// Get a borrow to any owned data.
     pub fn to_borrowed<Borrowed: ?Sized>(&self) -> Connection<&Borrowed>
     where
         String: Borrow<Borrowed>,
@@ -160,6 +167,7 @@ fn parse_mqtt_connection<'a>(input: &mut &'a str) -> PResult<Connection<&'a str>
     })
 }
 
+/// Parse connection details from a string, for any known protocol
 pub fn parse_connection<'a>(input: &mut &'a str) -> PResult<Command<&'a str>> {
     let connection = dispatch! { preceded(space0, alpha0);
         "serial" => parse_serial_connection,

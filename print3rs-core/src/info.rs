@@ -1,5 +1,6 @@
 use std::{collections::HashMap, ops::Deref};
 
+/// Generic type for holding arbitrary device information
 #[derive(Debug, Clone, PartialEq, PartialOrd, Default)]
 pub enum Info {
     #[default]
@@ -17,6 +18,13 @@ impl From<Info> for bool {
 }
 
 impl Info {
+    /// Asses truthiness for any possible contained type
+    ///
+    /// Key: always true
+    /// Integral: true if >0 (positive only)
+    /// float: true if not exactly 0.0
+    /// bool: true if true
+    /// string: true if non-empty
     pub fn is_true(&self) -> bool {
         match self {
             Info::Key => true,
@@ -30,6 +38,11 @@ impl Info {
 }
 
 pub type InfoMapInner = HashMap<String, Info>;
+
+/// Key:value store of various printer information
+///
+/// Use this type to store information about a printer,
+/// and query various capabilities to determine extended functionality
 #[derive(Debug, Default, Clone)]
 pub struct InfoMap(InfoMapInner);
 
@@ -53,6 +66,8 @@ impl From<InfoMap> for InfoMapInner {
     }
 }
 
+/// Known named capabilities of devices
+#[non_exhaustive]
 pub enum Capability {
     AutoreportTemp,
     AutoreportPos,
@@ -88,12 +103,15 @@ impl Capability {
 }
 
 impl InfoMap {
+    /// Check if a named known capability is supported on this device.
     pub fn has_capability(&self, capability: Capability) -> bool {
         self.0.get(capability.as_str()).is_some_and(Info::is_true)
     }
+    /// Add a named known capability into this map, semantically meaning that this feature is supported.
     pub fn add_capability(&mut self, capability: Capability) {
         self.0.insert(capability.as_str().to_string(), Info::Key);
     }
+    /// Remove a named known capability, semantically asserting that this feature is NOT supported.
     pub fn remove_capability(&mut self, capability: Capability) {
         self.0.remove(capability.as_str());
     }

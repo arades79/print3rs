@@ -4,6 +4,9 @@ use winnow::{
     prelude::*,
 };
 
+/// Response from connected device to indicate if a command
+/// * has finished execution, possibly with a sequence number
+/// * failed parsing, possibly with a sequence number
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Response {
     Ok(Option<i32>),
@@ -28,6 +31,7 @@ fn resend_response(input: &mut &[u8]) -> PResult<Response> {
     .parse_next(input)
 }
 
+/// try to parse a `Response` out of a byte stream
 pub fn response(input: &mut &[u8]) -> PResult<Response> {
     alt((ok_response, resend_response)).parse_next(input)
 }

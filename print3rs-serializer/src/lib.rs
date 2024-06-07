@@ -5,8 +5,10 @@ use serde::{
 
 use std::sync::{atomic::AtomicI32 as Ai32, atomic::Ordering, Arc};
 
+/// Default start point for new sequencers
 pub const SEQUENCE_START: i32 = 1;
 
+/// An automatically sequenced serializer that can be cloned and sent between threads while guaranteeing strict sequence
 #[derive(Debug, Clone)]
 pub struct Sequenced {
     sequence: Arc<Ai32>,
@@ -20,6 +22,7 @@ impl Default for Sequenced {
     }
 }
 
+/// Serialize anything, provides no sequencing, thus no traceability
 pub fn serialize_unsequenced(t: impl Serialize) -> Box<[u8]> {
     let mut line = GcodeLine::new();
     line.serialize(t);
