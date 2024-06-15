@@ -17,7 +17,7 @@ use iced::Command;
 use tokio_serial::available_ports;
 use tokio_stream::wrappers::BroadcastStream;
 
-use winnow::prelude::*;
+use winnow::{combinator::todo, prelude::*};
 
 use rfd::AsyncFileDialog;
 
@@ -25,8 +25,17 @@ use crate::messages::{JogMove, Message};
 
 pub(crate) type AppElement<'a> = iced_aw::Element<'a, <App as iced::Application>::Message>;
 
+fn available_port_strings() -> Vec<String> {
+    available_ports()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|port| port.port_name)
+        .collect()
+}
+
 #[derive(Debug)]
 pub(crate) struct App {
+    pub(crate) protocol: String,
     pub(crate) ports: ComboState<String>,
     pub(crate) selected_port: Option<String>,
     pub(crate) commander: Commander,
@@ -47,15 +56,9 @@ impl iced::Application for App {
     type Flags = ();
 
     fn new(_flags: Self::Flags) -> (Self, iced::Command<Self::Message>) {
-        let mut ports: Vec<String> = available_ports()
-            .unwrap_or_default()
-            .into_iter()
-            .map(|port| port.port_name)
-            .collect();
-        ports.push("auto".to_string());
         (
             Self {
-                ports: ComboState::new(ports),
+                ports: ComboState::new(available_port_strings()),
                 selected_port: None,
                 bauds: ComboState::new(vec![2400, 9600, 19200, 38400, 57600, 115200, 250000]),
                 selected_baud: Some(115200),
@@ -63,6 +66,7 @@ impl iced::Application for App {
                 console: Default::default(),
                 error_messages: Default::default(),
                 theme: iced::Theme::Light,
+                protocol: "auto".to_string(),
             },
             iced::Command::none(),
         )
@@ -103,26 +107,33 @@ impl iced::Application for App {
             Message::ToggleConnect => {
                 if self.commander.printer().is_connected() {
                     self.commander.set_printer(Printer::Disconnected);
-                } else if let Some(ref port) = self.selected_port {
-                    if port == "auto" {
-                        if let Err(msg) =
-                            self.commander
-                                .dispatch(print3rs_commands::commands::Command::Connect(
-                                    Connection::Auto,
-                                ))
-                        {
-                            self.error_messages.push(msg.0);
+                } else {
+                    match &app.protocol {
+                        "serial" | "auto" => {
+                            if let Some(ref port) = self.selected_port {
+                                if port == "auto" {
+                                    if let Err(msg) = self.commander.dispatch(
+                                        print3rs_commands::commands::Command::Connect(
+                                            Connection::Auto,
+                                        ),
+                                    ) {
+                                        self.error_messages.push(msg.0);
+                                    }
+                                } else if let Err(msg) = self.commander.dispatch(
+                                    commands::Command::Connect(Connection::Serial {
+                                        port: port.as_str(),
+                                        baud: self.selected_baud,
+                                    }),
+                                ) {
+                                    self.error_messages.push(msg.0);
+                                }
+                            }
                         }
-                    } else if let Err(msg) =
-                        self.commander
-                            .dispatch(commands::Command::Connect(Connection::Serial {
-                                port: port.as_str(),
-                                baud: self.selected_baud,
-                            }))
-                    {
-                        self.error_messages.push(msg.0);
-                    }
-                }
+                        _ => self
+                            .error_messages
+                            .push("Unsupported protocol!".to_string()),
+                    };
+                };
 
                 Command::none()
             }
@@ -243,6 +254,19 @@ impl iced::Application for App {
             Message::NoOp => Command::none(),
             Message::ChangeTheme(theme) => {
                 self.theme = theme;
+                Command::none()
+            }
+            Message::ChangeProtocol(proto) => {
+                self.protocol = proto;
+                Command::none()
+            }
+            Message::UpdatePorts => {
+                match &self.protocol {
+                    "serial" | "auto" => {
+                        self.ports = ComboState::new(available_port_strings());
+                    }
+                    _ => (),
+                };
                 Command::none()
             }
         }

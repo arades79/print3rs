@@ -1,10 +1,17 @@
-use iced::widget::{button, combo_box, row};
+use iced::widget::{button, combo_box, pick_list, row};
 use iced::Length;
 
-use crate::messages::Message;
 use crate::app::{App, AppElement};
+use crate::messages::Message;
 
 pub(crate) fn connector(app: &App) -> AppElement<'_> {
+    let protocol_selector = pick_list(
+        ["auto", "serial", "tcp/ip", "mqtt"],
+        Some(app.protocol),
+        Message::ChangeProtocol,
+    )
+    .width(Length::FillPortion(2))
+    .on_close(Message::UpdatePorts);
     let port_list = combo_box(
         &app.ports,
         "printer port",

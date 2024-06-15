@@ -38,6 +38,8 @@ impl JogMove {
 #[derive(Debug, Clone)]
 pub(crate) enum Message {
     Jog(JogMove),
+    ChangeProtocol(String),
+    UpdatePorts,
     ChangePort(String),
     ChangeBaud(u32),
     ToggleConnect,
