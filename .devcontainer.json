@@ -14,8 +14,6 @@
         "ghcr.io/lee-orr/rusty-dev-containers/rust_windows_msvc:0": {}
     },
     "runArgs": [
-        "--device=/dev/dri",
-        "-v /dev:/dev",
-        "--device-cgroup-rule='c 188:* rmw'"
+        "--device=/dev/dri"
     ]
 }
