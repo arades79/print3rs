@@ -1,6 +1,7 @@
 {
     "image": "docker.io/ubuntu:latest",
     "remoteUser": "${localEnv:USER}",
+    "containerUser": "ubuntu",
     "features": {
         "ghcr.io/devcontainers/features/common-utils": {},
         "ghcr.io/devcontainers/features/desktop-lite:1": {},
@@ -8,11 +9,7 @@
             "packages": "curl,git,pkg-config,libudev-dev,mesa-utils,libgtk-3-dev",
             "upgradePackages": true
         },
-        "ghcr.io/devcontainers/features/rust:1": {},
-        "ghcr.io/lee-orr/rusty-dev-containers/cargo-binstall": {},
-        "ghcr.io/lee-orr/rusty-dev-containers/cargo-nextest:0": {},
-        "ghcr.io/lee-orr/rusty-dev-containers/cargo-llvm-cov:0": {},
-        "ghcr.io/lee-orr/rusty-dev-containers/rust_windows_msvc:0": {}
+        "ghcr.io/devcontainers/features/rust:1": {}
     },
     "runArgs": [
         "--device=/dev/dri"
