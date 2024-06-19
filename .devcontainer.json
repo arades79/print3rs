@@ -1,5 +1,6 @@
 {
     "image": "docker.io/ubuntu:latest",
+    "remoteUser": "${localEnv:USER}",
     "features": {
         "ghcr.io/devcontainers/features/common-utils": {},
         "ghcr.io/devcontainers/features/desktop-lite:1": {},
