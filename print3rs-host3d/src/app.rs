@@ -17,7 +17,7 @@ use iced::Command;
 use tokio_serial::available_ports;
 use tokio_stream::wrappers::BroadcastStream;
 
-use winnow::{combinator::todo, prelude::*};
+use winnow::prelude::*;
 
 use rfd::AsyncFileDialog;
 
@@ -108,7 +108,7 @@ impl iced::Application for App {
                 if self.commander.printer().is_connected() {
                     self.commander.set_printer(Printer::Disconnected);
                 } else {
-                    match &app.protocol {
+                    match self.protocol.as_str() {
                         "serial" | "auto" => {
                             if let Some(ref port) = self.selected_port {
                                 if port == "auto" {
@@ -261,7 +261,7 @@ impl iced::Application for App {
                 Command::none()
             }
             Message::UpdatePorts => {
-                match &self.protocol {
+                match self.protocol.as_str() {
                     "serial" | "auto" => {
                         self.ports = ComboState::new(available_port_strings());
                     }

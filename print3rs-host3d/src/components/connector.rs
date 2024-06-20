@@ -5,10 +5,10 @@ use crate::app::{App, AppElement};
 use crate::messages::Message;
 
 pub(crate) fn connector(app: &App) -> AppElement<'_> {
-    let protocol_selector = pick_list(
+    let protocol_selector: pick_list::PickList<&str, [&str; 4], &str, Message> = pick_list(
         ["auto", "serial", "tcp/ip", "mqtt"],
-        Some(app.protocol),
-        Message::ChangeProtocol,
+        Some(app.protocol.as_str()),
+        |s| Message::ChangeProtocol(s.to_string()),
     )
     .width(Length::FillPortion(2))
     .on_close(Message::UpdatePorts);
@@ -29,6 +29,7 @@ pub(crate) fn connector(app: &App) -> AppElement<'_> {
     .width(Length::FillPortion(1))
     .on_input(|s| Message::ChangeBaud(s.parse().unwrap_or_default()));
     row![
+        protocol_selector,
         port_list,
         baud_list,
         button(if app.commander.printer().is_connected() {
