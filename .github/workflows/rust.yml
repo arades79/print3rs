@@ -19,7 +19,7 @@ jobs:
     - name: Install jq tool
       run: |
         sudo apt update
-        sudo apt install libudev-dev
+        sudo apt install libudev-dev libgtk-3-dev
     - name: Build
       run: cargo build --verbose
     - name: Check
