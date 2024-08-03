@@ -37,6 +37,7 @@ impl State {
             self.command.as_ref(),
             Message::CommandInput,
         )
+        .font(Font::MONOSPACE)
         .on_input(Message::CommandInput);
         let content = text_editor(&self.output)
             .on_action(Message::OutputAction)
