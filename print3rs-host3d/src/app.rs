@@ -251,6 +251,22 @@ impl iced::Application for App {
                 self.jog_scale = scale;
                 Command::none()
             }
+            Message::Home(axis) => {
+                let arg = match axis {
+                    crate::messages::MoveAxis::X => " X",
+                    crate::messages::MoveAxis::Y => " Y",
+                    crate::messages::MoveAxis::Z => " Z",
+                    crate::messages::MoveAxis::All => "",
+                };
+                if let Err(msg) = self
+                    .commander
+                    .printer()
+                    .try_send_unsequenced(format!("G28{arg}"))
+                {
+                    self.error_messages.push(msg.to_string());
+                }
+                Command::none()
+            }
         }
     }
 
