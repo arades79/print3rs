@@ -1,41 +1,79 @@
-use iced::widget::{button, column, row};
+use iced::widget::{button, column, container, row, slider, text, Space};
 
 use crate::app::{App, AppElement};
-use crate::messages::{JogMove, Message};
+use crate::messages::{JogMove, Message, MoveAxis};
 
 pub(crate) fn jogger(app: &App) -> AppElement<'_> {
-    let maybe_jog = |jogmove| {
-        app.commander
-            .printer()
-            .is_connected()
-            .then_some(Message::Jog(jogmove))
+    enum Jog {
+        X(f32),
+        Y(f32),
+        Z(f32),
+    }
+    const BUTTON_WIDTH: f32 = 72.0;
+    let if_connected = |message| app.commander.printer().is_connected().then_some(message);
+    let jog_button = |jog: Jog| {
+        let (label, jogmove) = match jog {
+            Jog::X(scale) => (text(format!("X{scale:+}")), JogMove::x(scale)),
+            Jog::Y(scale) => (text(format!("Y{scale:+}")), JogMove::y(scale)),
+            Jog::Z(scale) => (
+                text(format!("Z{:+.1}", scale / 10.0)),
+                JogMove::z(scale / 10.0),
+            ),
+        };
+        button(
+            label
+                .horizontal_alignment(iced::alignment::Horizontal::Center)
+                .vertical_alignment(iced::alignment::Vertical::Center),
+        )
+        .on_press_maybe(if_connected(Message::Jog(jogmove)))
+        .width(BUTTON_WIDTH)
     };
-    row![
-        column![
-            button("Y+100.0").on_press_maybe(maybe_jog(JogMove::y(100.0))),
-            button("Y+10.0").on_press_maybe(maybe_jog(JogMove::y(10.0))),
-            button("Y+1.0").on_press_maybe(maybe_jog(JogMove::y(1.0))),
-            row![
-                button("X-100.0").on_press_maybe(maybe_jog(JogMove::x(-100.0))),
-                button("X-10.0").on_press_maybe(maybe_jog(JogMove::x(-10.0))),
-                button("X-1.0").on_press_maybe(maybe_jog(JogMove::x(-1.0))),
-                button("X+1.0").on_press_maybe(maybe_jog(JogMove::x(1.0))),
-                button("X+10.0").on_press_maybe(maybe_jog(JogMove::x(10.0))),
-                button("X+100.0").on_press_maybe(maybe_jog(JogMove::x(100.0)))
-            ],
-            button("Y-1.0").on_press_maybe(maybe_jog(JogMove::y(-1.0))),
-            button("Y-10.0").on_press_maybe(maybe_jog(JogMove::y(-10.0))),
-            button("Y-100.0").on_press_maybe(maybe_jog(JogMove::y(-100.0))),
+    let scale = app.jog_scale.round().max(1.0);
+    let xy_buttons = column![
+        jog_button(Jog::Y(scale)),
+        row![
+            jog_button(Jog::X(-scale)),
+            Space::with_width(BUTTON_WIDTH),
+            jog_button(Jog::X(scale)),
+        ],
+        jog_button(Jog::Y(-scale)),
+    ]
+    .align_items(iced::Alignment::Center);
+
+    container(column![
+        row![
+            xy_buttons,
+            Space::with_width(10.0),
+            column![
+                Space::with_height(10.0),
+                jog_button(Jog::Z(scale)),
+                Space::with_height(10.0),
+                jog_button(Jog::Z(-scale))
+            ]
         ]
         .align_items(iced::Alignment::Center),
-        column![
-            button("Z+10.0").on_press_maybe(maybe_jog(JogMove::z(-10.0))),
-            button("Z+1.0").on_press_maybe(maybe_jog(JogMove::z(-1.0))),
-            button("Z+0.1").on_press_maybe(maybe_jog(JogMove::z(-0.1))),
-            button("Z-0.1").on_press_maybe(maybe_jog(JogMove::z(0.1))),
-            button("Z-1.0").on_press_maybe(maybe_jog(JogMove::z(1.0))),
-            button("Z-10.0").on_press_maybe(maybe_jog(JogMove::z(10.0))),
-        ],
-    ]
+        Space::with_height(10.0),
+        row![
+            button(text("home").horizontal_alignment(iced::alignment::Horizontal::Center))
+                .width(BUTTON_WIDTH)
+                .on_press_maybe(if_connected(Message::Home(MoveAxis::All))),
+            button(text("X").horizontal_alignment(iced::alignment::Horizontal::Center))
+                .width(BUTTON_WIDTH / 2.0)
+                .on_press_maybe(if_connected(Message::Home(MoveAxis::X))),
+            button(text("Y").horizontal_alignment(iced::alignment::Horizontal::Center))
+                .width(BUTTON_WIDTH / 2.0)
+                .on_press_maybe(if_connected(Message::Home(MoveAxis::Y))),
+            button(text("Z").horizontal_alignment(iced::alignment::Horizontal::Center))
+                .width(BUTTON_WIDTH / 2.0)
+                .on_press_maybe(if_connected(Message::Home(MoveAxis::Z)))
+        ]
+        .align_items(iced::Alignment::Center),
+        row![slider(0.0..=100.0, app.jog_scale, Message::JogScale)
+            .step(1.0)
+            .shift_step(10.0),]
+    ])
+    .center_x()
+    .center_y()
+    .max_width(400.0)
     .into()
 }

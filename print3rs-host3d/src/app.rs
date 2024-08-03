@@ -35,6 +35,7 @@ pub(crate) struct App {
     pub(crate) console: Console,
     pub(crate) error_messages: Vec<String>,
     pub(crate) theme: iced::Theme,
+    pub(crate) jog_scale: f32,
 }
 
 impl iced::Application for App {
@@ -63,6 +64,7 @@ impl iced::Application for App {
                 console: Default::default(),
                 error_messages: Default::default(),
                 theme: iced::Theme::Light,
+                jog_scale: 10.0,
             },
             iced::Command::none(),
         )
@@ -243,6 +245,26 @@ impl iced::Application for App {
             Message::NoOp => Command::none(),
             Message::ChangeTheme(theme) => {
                 self.theme = theme;
+                Command::none()
+            }
+            Message::JogScale(scale) => {
+                self.jog_scale = scale;
+                Command::none()
+            }
+            Message::Home(axis) => {
+                let arg = match axis {
+                    crate::messages::MoveAxis::X => "X",
+                    crate::messages::MoveAxis::Y => "Y",
+                    crate::messages::MoveAxis::Z => "Z",
+                    crate::messages::MoveAxis::All => "",
+                };
+                if let Err(msg) = self
+                    .commander
+                    .printer()
+                    .try_send_unsequenced(format!("G28{arg}"))
+                {
+                    self.error_messages.push(msg.to_string());
+                }
                 Command::none()
             }
         }

@@ -35,9 +35,19 @@ impl JogMove {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MoveAxis {
+    X,
+    Y,
+    Z,
+    All,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) enum Message {
     Jog(JogMove),
+    Home(MoveAxis),
+    JogScale(f32),
     ChangePort(String),
     ChangeBaud(u32),
     ToggleConnect,
