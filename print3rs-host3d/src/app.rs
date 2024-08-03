@@ -253,9 +253,9 @@ impl iced::Application for App {
             }
             Message::Home(axis) => {
                 let arg = match axis {
-                    crate::messages::MoveAxis::X => " X",
-                    crate::messages::MoveAxis::Y => " Y",
-                    crate::messages::MoveAxis::Z => " Z",
+                    crate::messages::MoveAxis::X => "X",
+                    crate::messages::MoveAxis::Y => "Y",
+                    crate::messages::MoveAxis::Z => "Z",
                     crate::messages::MoveAxis::All => "",
                 };
                 if let Err(msg) = self

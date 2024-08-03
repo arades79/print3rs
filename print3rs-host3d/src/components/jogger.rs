@@ -1,4 +1,4 @@
-use iced::widget::{button, column, row, slider, text, Space};
+use iced::widget::{button, column, container, row, slider, text, Space};
 
 use crate::app::{App, AppElement};
 use crate::messages::{JogMove, Message, MoveAxis};
@@ -40,7 +40,7 @@ pub(crate) fn jogger(app: &App) -> AppElement<'_> {
     ]
     .align_items(iced::Alignment::Center);
 
-    column![
+    container(column![
         row![
             xy_buttons,
             Space::with_width(10.0),
@@ -68,9 +68,12 @@ pub(crate) fn jogger(app: &App) -> AppElement<'_> {
                 .on_press_maybe(if_connected(Message::Home(MoveAxis::Z)))
         ]
         .align_items(iced::Alignment::Center),
-        slider(0.0..=100.0, app.jog_scale, Message::JogScale)
+        row![slider(0.0..=100.0, app.jog_scale, Message::JogScale)
             .step(1.0)
-            .shift_step(10.0)
-    ]
+            .shift_step(10.0),]
+    ])
+    .center_x()
+    .center_y()
+    .max_width(400.0)
     .into()
 }
