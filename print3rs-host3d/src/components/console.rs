@@ -1,14 +1,12 @@
 use {
     iced::{
-        widget::{
-            button, column, combo_box, combo_box::State as ComboState, row, text_editor,
-        },
-        Length,
+        widget::{button, column, combo_box, combo_box::State as ComboState, row, text_editor},
+        Font, Length,
     },
     std::collections::VecDeque,
 };
 
-use crate::app::{AppElement};
+use crate::app::AppElement;
 use crate::messages::Message;
 use iced::widget::text_editor::Content;
 
@@ -42,7 +40,8 @@ impl State {
         .on_input(Message::CommandInput);
         let content = text_editor(&self.output)
             .on_action(Message::OutputAction)
-            .height(Length::Fill);
+            .height(Length::Fill)
+            .font(Font::MONOSPACE);
         column![
             content,
             row![prompt, button("send").on_press(Message::SubmitCommand),]
