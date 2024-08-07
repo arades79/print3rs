@@ -2,7 +2,7 @@ use {
     crate::components,
     iced::{
         futures::prelude::stream::StreamExt,
-        widget::column,
+        widget::{column, container, row},
         window::{self, Action},
     },
     print3rs_commands::{commander::Commander, commands},
@@ -28,10 +28,8 @@ pub(crate) type AppElement<'a> = iced_aw::Element<'a, <App as iced::Application>
 #[derive(Debug)]
 pub(crate) struct App {
     pub(crate) ports: ComboState<String>,
-    pub(crate) selected_port: Option<String>,
+    pub(crate) connection: Connection<String>,
     pub(crate) commander: Commander,
-    pub(crate) bauds: ComboState<u32>,
-    pub(crate) selected_baud: Option<u32>,
     pub(crate) console: Console,
     pub(crate) error_messages: Vec<String>,
     pub(crate) theme: iced::Theme,
@@ -57,9 +55,7 @@ impl iced::Application for App {
         (
             Self {
                 ports: ComboState::new(ports),
-                selected_port: None,
-                bauds: ComboState::new(vec![2400, 9600, 19200, 38400, 57600, 115200, 250000]),
-                selected_baud: Some(115200),
+                connection: Connection::Auto,
                 commander: Default::default(),
                 console: Default::default(),
                 error_messages: Default::default(),
@@ -105,37 +101,23 @@ impl iced::Application for App {
             Message::ToggleConnect => {
                 if self.commander.printer().is_connected() {
                     self.commander.set_printer(Printer::Disconnected);
-                } else if let Some(ref port) = self.selected_port {
-                    if port == "auto" {
-                        if let Err(msg) =
-                            self.commander
-                                .dispatch(print3rs_commands::commands::Command::Connect(
-                                    Connection::Auto,
-                                ))
-                        {
-                            self.error_messages.push(msg.0);
-                        }
-                    } else if let Err(msg) =
-                        self.commander
-                            .dispatch(commands::Command::Connect(Connection::Serial {
-                                port: port.as_str(),
-                                baud: self.selected_baud,
-                            }))
-                    {
-                        self.error_messages.push(msg.0);
-                    }
+                } else if let Err(msg) =
+                    self.commander
+                        .dispatch(print3rs_commands::commands::Command::Connect(
+                            self.connection.to_borrowed(),
+                        ))
+                {
+                    self.error_messages.push(msg.0);
                 }
 
                 Command::none()
             }
             Message::CommandInput(s) => {
-                self.console.command = Some(s);
+                self.console.command = s;
                 Command::none()
             }
             Message::SubmitCommand => {
-                let Some(ref mut command_string) = self.console.command else {
-                    return Command::none();
-                };
+                let command_string = &mut self.console.command;
                 if command_string.is_empty() {
                     return Command::none();
                 }
@@ -167,14 +149,6 @@ impl iced::Application for App {
                 if let Err(msg) = self.commander.dispatch(&command) {
                     self.error_messages.push(msg.0)
                 }
-                Command::none()
-            }
-            Message::ChangePort(port) => {
-                self.selected_port = Some(port);
-                Command::none()
-            }
-            Message::ChangeBaud(baud) => {
-                self.selected_baud = Some(baud);
                 Command::none()
             }
             Message::ConsoleAppend(s) => {
@@ -267,16 +241,40 @@ impl iced::Application for App {
                 }
                 Command::none()
             }
+            Message::SelectProtocol(proto) => {
+                self.connection = match proto {
+                    components::Protocol::Auto => Connection::Auto,
+                    components::Protocol::Serial => Connection::Serial {
+                        port: "".to_string(),
+                        baud: None,
+                    },
+                    components::Protocol::Tcp => Connection::Tcp {
+                        hostname: "".to_string(),
+                        port: None,
+                    },
+                    components::Protocol::Mqtt => Connection::Mqtt {
+                        hostname: "".to_string(),
+                        port: None,
+                        in_topic: None,
+                        out_topic: None,
+                    },
+                };
+                Command::none()
+            }
+            Message::ChangeConnection(connection) => {
+                self.connection = connection;
+                Command::none()
+            }
         }
     }
 
     fn view(&self) -> iced::Element<'_, Self::Message, Self::Theme, iced::Renderer> {
-        let screen = column![
-            components::app_menu(self),
-            components::connector(self),
-            components::jogger(self),
+        let main_content = container(column![
+            row![components::connector(self), components::jogger(self)],
             self.console.view(),
-        ];
+        ])
+        .padding(10.0);
+        let screen = column![components::app_menu(self), main_content];
 
         components::error_prompt(self, screen).into()
     }

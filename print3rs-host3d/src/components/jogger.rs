@@ -1,9 +1,11 @@
-use iced::widget::{button, column, container, row, slider, text, Space};
-
-use crate::app::{App, AppElement};
+use super::centered_row::centered_row;
+use crate::app::App;
 use crate::messages::{JogMove, Message, MoveAxis};
+use iced::widget::{button, column, container, row, slider, text, Space};
+use iced::Element;
+use iced_aw::widgets::number_input;
 
-pub(crate) fn jogger(app: &App) -> AppElement<'_> {
+pub(crate) fn jogger(app: &App) -> Element<'_, Message> {
     enum Jog {
         X(f32),
         Y(f32),
@@ -35,45 +37,53 @@ pub(crate) fn jogger(app: &App) -> AppElement<'_> {
             jog_button(Jog::X(-scale)),
             Space::with_width(BUTTON_WIDTH),
             jog_button(Jog::X(scale)),
-        ],
+        ]
+        .spacing(0.0),
         jog_button(Jog::Y(-scale)),
     ]
+    .spacing(0.0)
     .align_items(iced::Alignment::Center);
 
-    container(column![
-        row![
-            xy_buttons,
-            Space::with_width(10.0),
-            column![
-                Space::with_height(10.0),
-                jog_button(Jog::Z(scale)),
-                Space::with_height(10.0),
-                jog_button(Jog::Z(-scale))
+    container(
+        column![
+            centered_row![
+                xy_buttons,
+                column![
+                    Space::with_height(10.0),
+                    jog_button(Jog::Z(scale)),
+                    Space::with_height(10.0),
+                    jog_button(Jog::Z(-scale))
+                ]
+                .spacing(10.0),
             ]
+            .spacing(10.0)
+            .align_items(iced::Alignment::Center),
+            centered_row![
+                slider(0.0..=100.0, app.jog_scale, Message::JogScale)
+                    .step(1.0)
+                    .shift_step(10.0)
+                    .width(240),
+                number_input(scale, 100.0, Message::JogScale).width(70),
+            ]
+            .spacing(10.0),
+            centered_row![
+                button(text("home").horizontal_alignment(iced::alignment::Horizontal::Center))
+                    .width(BUTTON_WIDTH)
+                    .on_press_maybe(if_connected(Message::Home(MoveAxis::All))),
+                button(text("X").horizontal_alignment(iced::alignment::Horizontal::Center))
+                    .width(BUTTON_WIDTH / 2.0)
+                    .on_press_maybe(if_connected(Message::Home(MoveAxis::X))),
+                button(text("Y").horizontal_alignment(iced::alignment::Horizontal::Center))
+                    .width(BUTTON_WIDTH / 2.0)
+                    .on_press_maybe(if_connected(Message::Home(MoveAxis::Y))),
+                button(text("Z").horizontal_alignment(iced::alignment::Horizontal::Center))
+                    .width(BUTTON_WIDTH / 2.0)
+                    .on_press_maybe(if_connected(Message::Home(MoveAxis::Z))),
+            ],
         ]
-        .align_items(iced::Alignment::Center),
-        Space::with_height(10.0),
-        row![
-            button(text("home").horizontal_alignment(iced::alignment::Horizontal::Center))
-                .width(BUTTON_WIDTH)
-                .on_press_maybe(if_connected(Message::Home(MoveAxis::All))),
-            button(text("X").horizontal_alignment(iced::alignment::Horizontal::Center))
-                .width(BUTTON_WIDTH / 2.0)
-                .on_press_maybe(if_connected(Message::Home(MoveAxis::X))),
-            button(text("Y").horizontal_alignment(iced::alignment::Horizontal::Center))
-                .width(BUTTON_WIDTH / 2.0)
-                .on_press_maybe(if_connected(Message::Home(MoveAxis::Y))),
-            button(text("Z").horizontal_alignment(iced::alignment::Horizontal::Center))
-                .width(BUTTON_WIDTH / 2.0)
-                .on_press_maybe(if_connected(Message::Home(MoveAxis::Z)))
-        ]
-        .align_items(iced::Alignment::Center),
-        row![slider(0.0..=100.0, app.jog_scale, Message::JogScale)
-            .step(1.0)
-            .shift_step(10.0),]
-    ])
+        .spacing(10.0),
+    )
     .center_x()
-    .center_y()
-    .max_width(400.0)
+    .padding(10)
     .into()
 }

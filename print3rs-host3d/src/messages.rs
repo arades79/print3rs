@@ -1,11 +1,16 @@
 use {
-    print3rs_commands::{commands::Command, response::Response},
+    print3rs_commands::{
+        commands::{connect::Connection, Command},
+        response::Response,
+    },
     print3rs_core::Printer,
     std::{
         path::PathBuf,
         sync::{Arc, Mutex},
     },
 };
+
+use crate::components::Protocol;
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct JogMove {
@@ -47,10 +52,10 @@ pub enum MoveAxis {
 pub(crate) enum Message {
     Jog(JogMove),
     Home(MoveAxis),
-    JogScale(f32),
-    ChangePort(String),
-    ChangeBaud(u32),
+    SelectProtocol(Protocol),
+    ChangeConnection(Connection<String>),
     ToggleConnect,
+    JogScale(f32),
     CommandInput(String),
     SubmitCommand,
     ProcessCommand(Command<String>),
