@@ -12,7 +12,7 @@ use crate::messages::Message;
 
 macro_rules! menu_template {
      ($($x:tt)+) => {
-         menu!($($x)+).max_width(180.0)
+         menu!($($x)+).max_width(200.0)
      };
  }
 
