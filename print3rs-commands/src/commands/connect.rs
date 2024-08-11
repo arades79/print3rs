@@ -1,8 +1,11 @@
 use {
     super::Command,
     print3rs_core::Printer,
-    std::{borrow::Borrow, time::Duration},
-    tokio::{io::BufReader, time::sleep, time::timeout},
+    std::{borrow::Borrow, str::FromStr, time::Duration},
+    tokio::{
+        io::BufReader,
+        time::{sleep, timeout},
+    },
     tokio_serial::{available_ports, SerialPort, SerialPortBuilderExt, SerialPortInfo},
     winnow::{
         ascii::{alpha0, dec_uint, space0},
@@ -45,6 +48,18 @@ pub async fn auto_connect() -> Printer {
         }
     }
     Printer::Disconnected
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct HostPort(pub String, pub Option<u16>);
+
+impl FromStr for HostPort {
+    type Err = winnow::error::ContextError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let (host, port) = parse_hostname_port.parse(s).map_err(|e| e.into_inner())?;
+        Ok(HostPort(host.to_string(), port))
+    }
 }
 
 /// Underlying protocol used to establish communication to device.

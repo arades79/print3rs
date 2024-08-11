@@ -2,13 +2,14 @@ use iced::{
     widget::{button, column, combo_box},
     Element,
 };
-use iced::{
-    widget::{row, text_input},
-    Length,
-};
 use {
     super::centered_row::centered_row,
     iced::widget::{pick_list, radio},
+};
+use {
+    iced::widget::{row, text_input},
+    print3rs_commands::commands::connect::HostPort,
+    std::str::FromStr,
 };
 
 use print3rs_commands::commands::connect::Connection;
@@ -52,68 +53,91 @@ pub(crate) fn connector(app: &App) -> Element<'_, Message> {
             ),),
         ]
         .into(),
-        Connection::Tcp { hostname, port } => text_input("hostname:port", &hostname)
-            .on_input(move |hostname| Message::ChangeConnection(Connection::Tcp { hostname, port }))
-            .into(),
+        Connection::Tcp { hostname, port } => {
+            let host_port_string = if let Some(port) = port {
+                format!("{hostname}:{port}")
+            } else {
+                hostname
+            };
+            text_input("hostname:port", &host_port_string)
+                .on_input(move |hostname| {
+                    let HostPort(hostname, port) = if hostname.ends_with(':') {
+                        HostPort(hostname, None)
+                    } else {
+                        HostPort::from_str(&hostname).unwrap_or(HostPort(hostname, None))
+                    };
+                    Message::ChangeConnection(Connection::Tcp { hostname, port })
+                })
+                .into()
+        }
         Connection::Mqtt {
             hostname,
             port,
             in_topic,
             out_topic,
-        } => column![
-            text_input("hostname:port", &hostname).on_input({
-                let in_topic = in_topic.clone();
-                let out_topic = out_topic.clone();
-                move |hostname| {
+        } => {
+            let host_port_string = if let Some(port) = port {
+                format!("{hostname}:{port}")
+            } else {
+                hostname.clone()
+            };
+            column![
+                text_input("hostname:port", &host_port_string).on_input({
                     let in_topic = in_topic.clone();
                     let out_topic = out_topic.clone();
-                    Message::ChangeConnection(Connection::Mqtt {
-                        hostname,
-                        port,
-                        in_topic,
-                        out_topic,
-                    })
-                }
-            }),
-            text_input("in topic", &in_topic.clone().unwrap_or_default()).on_input({
-                let hostname = hostname.clone();
-                let out_topic = out_topic.clone();
-                move |in_topic| {
+                    move |hostname| {
+                        let HostPort(hostname, port) =
+                            HostPort::from_str(&hostname).unwrap_or(HostPort(hostname, None));
+                        let in_topic = in_topic.clone();
+                        let out_topic = out_topic.clone();
+                        Message::ChangeConnection(Connection::Mqtt {
+                            hostname,
+                            port,
+                            in_topic,
+                            out_topic,
+                        })
+                    }
+                }),
+                text_input("in topic", &in_topic.clone().unwrap_or_default()).on_input({
                     let hostname = hostname.clone();
-                    let in_topic = if in_topic.is_empty() {
-                        None
-                    } else {
-                        Some(in_topic)
-                    };
                     let out_topic = out_topic.clone();
-                    Message::ChangeConnection(Connection::Mqtt {
-                        hostname,
-                        port,
-                        in_topic,
-                        out_topic,
-                    })
-                }
-            }),
-            text_input("out topic", &out_topic.unwrap_or_default()).on_input({
-                let hostname = hostname.clone();
-                let in_topic = in_topic.clone();
-                move |out_topic| {
+                    move |in_topic| {
+                        let hostname = hostname.clone();
+                        let in_topic = if in_topic.is_empty() {
+                            None
+                        } else {
+                            Some(in_topic)
+                        };
+                        let out_topic = out_topic.clone();
+                        Message::ChangeConnection(Connection::Mqtt {
+                            hostname,
+                            port,
+                            in_topic,
+                            out_topic,
+                        })
+                    }
+                }),
+                text_input("out topic", &out_topic.unwrap_or_default()).on_input({
                     let hostname = hostname.clone();
                     let in_topic = in_topic.clone();
-                    let out_topic = if out_topic.is_empty() {
-                        None
-                    } else {
-                        Some(out_topic)
-                    };
-                    Message::ChangeConnection(Connection::Mqtt {
-                        hostname,
-                        port,
-                        in_topic,
-                        out_topic,
-                    })
-                }
-            })
-        ]
+                    move |out_topic| {
+                        let hostname = hostname.clone();
+                        let in_topic = in_topic.clone();
+                        let out_topic = if out_topic.is_empty() {
+                            None
+                        } else {
+                            Some(out_topic)
+                        };
+                        Message::ChangeConnection(Connection::Mqtt {
+                            hostname,
+                            port,
+                            in_topic,
+                            out_topic,
+                        })
+                    }
+                })
+            ]
+        }
         .into(),
         _ => todo!(),
     };
