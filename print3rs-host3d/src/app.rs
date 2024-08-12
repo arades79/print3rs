@@ -2,7 +2,7 @@ use {
     crate::components,
     iced::{
         futures::prelude::stream::StreamExt,
-        widget::{column, container, row},
+        widget::{column, container, row, vertical_rule},
         window::{self, Action},
     },
     print3rs_commands::{commander::Commander, commands},
@@ -270,7 +270,11 @@ impl iced::Application for App {
 
     fn view(&self) -> iced::Element<'_, Self::Message, Self::Theme, iced::Renderer> {
         let main_content = container(column![
-            row![components::connector(self), components::jogger(self)],
+            row![
+                components::connector(self),
+                vertical_rule(4),
+                components::jogger(self)
+            ],
             self.console.view(),
         ])
         .padding(10.0);
