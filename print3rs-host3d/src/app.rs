@@ -274,7 +274,8 @@ impl iced::Application for App {
                 components::connector(self),
                 horizontal_rule(4),
                 components::jogger(self)
-            ],
+            ]
+            .padding(10),
             self.console.view(),
         ])
         .padding(10.0);

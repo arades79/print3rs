@@ -1,7 +1,7 @@
 use {
     iced::{
         widget::{button, column, combo_box::State as ComboState, row, text_editor, text_input},
-        Length,
+        Font, Length,
     },
     std::collections::VecDeque,
 };
@@ -39,12 +39,14 @@ impl State {
         // )
         // .on_input(Message::CommandInput);
         let content = text_editor(&self.output)
+            .font(Font::MONOSPACE)
             .on_action(Message::OutputAction)
             .height(Length::Fill);
         column![
             content,
             row![
                 text_input("type `help` for list of commands", self.command.as_str())
+                    .font(Font::MONOSPACE)
                     .on_input(Message::CommandInput)
                     .on_submit(Message::SubmitCommand),
                 button("send").on_press(Message::SubmitCommand),
