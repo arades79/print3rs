@@ -52,6 +52,7 @@ pub(crate) fn connector(app: &App) -> Element<'_, Message> {
                 }
             ),),
         ]
+        .spacing(5)
         .into(),
         Connection::Tcp { hostname, port } => {
             let host_port_string = if let Some(port) = port {
@@ -137,6 +138,7 @@ pub(crate) fn connector(app: &App) -> Element<'_, Message> {
                     }
                 })
             ]
+            .spacing(5)
         }
         .into(),
         _ => todo!(),
@@ -182,6 +184,7 @@ pub(crate) fn connector(app: &App) -> Element<'_, Message> {
         })
         .on_press(Message::ToggleConnect)]
     ]
-    .spacing(10.0)
+    .spacing(10)
+    .padding(10)
     .into()
 }
