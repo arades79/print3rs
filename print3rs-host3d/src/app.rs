@@ -1,21 +1,17 @@
+use cosmic::{
+    app::Core, iced::Subscription, prelude::*, widget, widget::combo_box::State as ComboState,
+    Application, Command,
+};
 use {
     crate::components,
-    iced::{
-        futures::prelude::stream::StreamExt,
-        widget::{column, container, horizontal_rule, row, vertical_rule},
-        window::{self, Action},
-    },
     print3rs_commands::{commander::Commander, commands},
     print3rs_core::Printer,
     std::sync::Arc,
 };
 use {crate::components::Console, print3rs_commands::commands::connect::Connection};
 
-use iced::widget::combo_box::State as ComboState;
-use iced::Command;
-
 use tokio_serial::available_ports;
-use tokio_stream::wrappers::BroadcastStream;
+use tokio_stream::{wrappers::BroadcastStream, StreamExt};
 
 use winnow::prelude::*;
 
@@ -23,29 +19,24 @@ use rfd::AsyncFileDialog;
 
 use crate::messages::{JogMove, Message};
 
-pub(crate) type AppElement<'a> = iced_aw::Element<'a, <App as iced::Application>::Message>;
-
-#[derive(Debug)]
 pub(crate) struct App {
+    pub(crate) cosmic: Core,
     pub(crate) ports: ComboState<String>,
     pub(crate) connection: Connection<String>,
     pub(crate) commander: Commander,
     pub(crate) console: Console,
     pub(crate) error_messages: Vec<String>,
-    pub(crate) theme: iced::Theme,
     pub(crate) jog_scale: f32,
 }
 
-impl iced::Application for App {
-    type Executor = iced::executor::Default;
-
+impl Application for App {
+    type Executor = cosmic::executor::Default;
     type Message = Message;
-
-    type Theme = iced::Theme;
-
     type Flags = ();
 
-    fn new(_flags: Self::Flags) -> (Self, iced::Command<Self::Message>) {
+    const APP_ID: &'static str = "com.print3rs.Host3d";
+
+    fn init(core: Core, _flags: Self::Flags) -> (Self, Command<cosmic::app::Message<Message>>) {
         let mut ports: Vec<String> = available_ports()
             .unwrap_or_default()
             .into_iter()
@@ -54,39 +45,30 @@ impl iced::Application for App {
         ports.push("auto".to_string());
         (
             Self {
+                cosmic: core,
                 ports: ComboState::new(ports),
                 connection: Connection::Auto,
                 commander: Default::default(),
                 console: Default::default(),
                 error_messages: Default::default(),
-                theme: iced::Theme::Light,
                 jog_scale: 10.0,
             },
-            iced::Command::none(),
+            Command::none(),
         )
     }
 
-    fn title(&self) -> String {
-        let status = if self.commander.printer().is_connected() {
-            "Connected"
-        } else {
-            "Disconnected"
-        };
-        format!("Print3rs - {status}")
-    }
-
-    fn subscription(&self) -> iced::Subscription<Self::Message> {
+    fn subscription(&self) -> Subscription<Self::Message> {
         struct PrinterResponseSubscription;
         let responses = self.commander.subscribe_responses();
         let response_stream =
             BroadcastStream::new(responses).map(|response| Message::from(response.unwrap()));
-        iced::subscription::run_with_id(
+        cosmic::iced::subscription::run_with_id(
             std::any::TypeId::of::<PrinterResponseSubscription>(),
             response_stream,
         )
     }
 
-    fn update(&mut self, message: Self::Message) -> iced::Command<Self::Message> {
+    fn update(&mut self, message: Self::Message) -> Command<cosmic::app::Message<Message>> {
         match message {
             Message::Jog(JogMove { x, y, z }) => {
                 if let Err(msg) = self
@@ -152,7 +134,7 @@ impl iced::Application for App {
                 Command::none()
             }
             Message::ConsoleAppend(s) => {
-                use iced::widget::text_editor::{Action, Edit};
+                use widget::text_editor::{Action, Edit};
                 for c in s.chars() {
                     let action = Action::Edit(Edit::Insert(c));
                     self.console.output.perform(action)
@@ -169,23 +151,23 @@ impl iced::Application for App {
                 Command::none()
             }
             Message::ClearConsole => {
-                self.console.output = iced::widget::text_editor::Content::new();
+                self.console.output = cosmic::widget::text_editor::Content::new();
                 Command::none()
             }
-            Message::Quit => Command::single(iced_runtime::command::Action::Window(Action::Close(
-                window::Id::MAIN,
-            ))),
+            Message::Quit => cosmic::command::message(cosmic::app::Message::Cosmic(
+                cosmic::app::cosmic::Message::Close,
+            )),
             Message::PrintDialog => Command::perform(
                 AsyncFileDialog::new()
                     .set_directory(directories_next::BaseDirs::new().unwrap().home_dir())
                     .pick_file(),
                 |f| match f {
-                    Some(file) => {
-                        Message::ProcessCommand(print3rs_commands::commands::Command::Print(
+                    Some(file) => cosmic::app::Message::App(Message::ProcessCommand(
+                        print3rs_commands::commands::Command::Print(
                             file.path().to_string_lossy().into_owned(),
-                        ))
-                    }
-                    None => Message::NoOp,
+                        ),
+                    )),
+                    None => cosmic::app::Message::App(Message::NoOp),
                 },
             ),
             Message::SaveDialog => Command::perform(
@@ -193,8 +175,8 @@ impl iced::Application for App {
                     .set_directory(directories_next::BaseDirs::new().unwrap().home_dir())
                     .save_file(),
                 |f| match f {
-                    Some(file) => Message::SaveConsole(file.into()),
-                    None => Message::NoOp,
+                    Some(file) => cosmic::app::Message::App(Message::SaveConsole(file.into())),
+                    None => cosmic::app::Message::App(Message::NoOp),
                 },
             ),
             Message::SaveConsole(file) => {
@@ -217,10 +199,7 @@ impl iced::Application for App {
                 Command::none()
             }
             Message::NoOp => Command::none(),
-            Message::ChangeTheme(theme) => {
-                self.theme = theme;
-                Command::none()
-            }
+            Message::ChangeTheme(theme) => Command::none(),
             Message::JogScale(scale) => {
                 self.jog_scale = scale;
                 Command::none()
@@ -268,23 +247,29 @@ impl iced::Application for App {
         }
     }
 
-    fn view(&self) -> iced::Element<'_, Self::Message, Self::Theme, iced::Renderer> {
-        let main_content = container(row![
-            column![
-                components::connector(self),
-                horizontal_rule(4),
-                components::jogger(self)
-            ]
-            .padding(10),
-            self.console.view(),
-        ])
-        .padding(10.0);
-        let screen = column![components::app_menu(self), main_content];
+    fn view(&self) -> Element<'_, Message> {
+        let main_content = widget::row()
+            .push(
+                widget::column()
+                    .push(components::connector(self))
+                    .push(cosmic::iced::widget::horizontal_rule(4))
+                    .push(components::jogger(self))
+                    .padding(10),
+            )
+            .push(self.console.view())
+            .padding(10);
+        let screen = widget::column()
+            .push(components::app_menu(self))
+            .push(main_content);
 
         components::error_prompt(self, screen).into()
     }
 
-    fn theme(&self) -> Self::Theme {
-        self.theme.clone()
+    fn core(&self) -> &Core {
+        &self.cosmic
+    }
+
+    fn core_mut(&mut self) -> &mut Core {
+        &mut self.cosmic
     }
 }
