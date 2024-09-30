@@ -68,8 +68,7 @@ pub(crate) enum Message {
     AutoConnectComplete(Arc<Mutex<Printer>>),
     PushError(String),
     DismissError,
-    OutputAction(iced::widget::text_editor::Action),
-    ChangeTheme(iced::Theme),
+    OutputAction(cosmic::widget::text_editor::Action),
     NoOp,
 }
 

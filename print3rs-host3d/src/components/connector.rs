@@ -1,15 +1,11 @@
-use iced::{
-    widget::{button, column, combo_box},
-    Element,
+use cosmic::{
+    iced::widget::{button, column, row},
+    iced_widget::pick_list,
 };
+use cosmic::{widget::combo_box, Element};
+use {super::centered_row::centered_row, cosmic::widget::radio};
 use {
-    super::centered_row::centered_row,
-    iced::widget::{pick_list, radio},
-};
-use {
-    iced::widget::{row, text_input},
-    print3rs_commands::commands::connect::HostPort,
-    std::str::FromStr,
+    cosmic::widget::text_input, print3rs_commands::commands::connect::HostPort, std::str::FromStr,
 };
 
 use print3rs_commands::commands::connect::Connection;
@@ -45,12 +41,14 @@ pub(crate) fn connector(app: &App) -> Element<'_, Message> {
                 Message::ChangeConnection(Connection::Serial { port, baud })
             },)
             .on_input(move |port| Message::ChangeConnection(Connection::Serial { port, baud })),
-            pick_list([9600, 115200], baud, move |baud| Message::ChangeConnection(
-                Connection::Serial {
+            pick_list(
+                &[9600, 115200],
+                baud,
+                move |baud| Message::ChangeConnection(Connection::Serial {
                     port: port.clone(),
                     baud: Some(baud)
-                }
-            ),),
+                }),
+            ),
         ]
         .spacing(5)
         .into(),
@@ -60,7 +58,7 @@ pub(crate) fn connector(app: &App) -> Element<'_, Message> {
             } else {
                 hostname
             };
-            text_input("hostname:port", &host_port_string)
+            text_input("hostname:port", host_port_string)
                 .on_input(move |hostname| {
                     let HostPort(hostname, port) = if hostname.ends_with(':') {
                         HostPort(hostname, None)
@@ -83,7 +81,7 @@ pub(crate) fn connector(app: &App) -> Element<'_, Message> {
                 hostname.clone()
             };
             column![
-                text_input("hostname:port", &host_port_string).on_input({
+                text_input("hostname:port", host_port_string).on_input({
                     let in_topic = in_topic.clone();
                     let out_topic = out_topic.clone();
                     move |hostname| {
@@ -99,7 +97,7 @@ pub(crate) fn connector(app: &App) -> Element<'_, Message> {
                         })
                     }
                 }),
-                text_input("in topic", &in_topic.clone().unwrap_or_default()).on_input({
+                text_input("in topic", in_topic.clone().unwrap_or_default()).on_input({
                     let hostname = hostname.clone();
                     let out_topic = out_topic.clone();
                     move |in_topic| {
@@ -118,7 +116,7 @@ pub(crate) fn connector(app: &App) -> Element<'_, Message> {
                         })
                     }
                 }),
-                text_input("out topic", &out_topic.unwrap_or_default()).on_input({
+                text_input("out topic", out_topic.unwrap_or_default()).on_input({
                     let hostname = hostname.clone();
                     let in_topic = in_topic.clone();
                     move |out_topic| {
@@ -173,7 +171,7 @@ pub(crate) fn connector(app: &App) -> Element<'_, Message> {
     .spacing(5);
     let protocol_selector = row!["Protocol:", auto, serial, tcp, mqtt]
         .spacing(20.0)
-        .align_items(iced::Alignment::Center);
+        .align_items(cosmic::iced::Alignment::Center);
     column![
         protocol_selector,
         connection_details,

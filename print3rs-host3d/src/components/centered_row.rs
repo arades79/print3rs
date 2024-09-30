@@ -1,7 +1,8 @@
 macro_rules! centered_row  {
     ($($x:expr),+ $(,)?) => (
-        iced::widget::row![iced::widget::horizontal_space(), $($x),+ , iced::widget::horizontal_space()]
+        ::cosmic::iced_widget::row![::cosmic::iced::widget::horizontal_space(::cosmic::iced::Length::Fill
+        ), $($x),+ , ::cosmic::iced_widget::horizontal_space(::cosmic::iced::Length::Fill
+        )]
     );
 }
-
 pub(crate) use centered_row;

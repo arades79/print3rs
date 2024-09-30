@@ -3,9 +3,7 @@ use cosmic::{
     Application, Command,
 };
 use {
-    crate::components,
-    print3rs_commands::{commander::Commander, commands},
-    print3rs_core::Printer,
+    crate::components, print3rs_commands::commander::Commander, print3rs_core::Printer,
     std::sync::Arc,
 };
 use {crate::components::Console, print3rs_commands::commands::connect::Connection};
@@ -181,7 +179,7 @@ impl Application for App {
             ),
             Message::SaveConsole(file) => {
                 Command::perform(tokio::fs::write(file, self.console.output.text()), |_| {
-                    Message::NoOp
+                    cosmic::app::Message::App(Message::NoOp)
                 })
             }
             Message::PushError(msg) => {
@@ -199,7 +197,6 @@ impl Application for App {
                 Command::none()
             }
             Message::NoOp => Command::none(),
-            Message::ChangeTheme(theme) => Command::none(),
             Message::JogScale(scale) => {
                 self.jog_scale = scale;
                 Command::none()
@@ -261,8 +258,7 @@ impl Application for App {
         let screen = widget::column()
             //.push(components::app_menu(self))
             .push(main_content);
-
-        components::error_prompt(self, screen).into()
+        screen.into()
     }
 
     fn core(&self) -> &Core {
