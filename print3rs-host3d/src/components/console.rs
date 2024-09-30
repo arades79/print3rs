@@ -38,13 +38,13 @@ impl State {
         // )
         // .on_input(Message::CommandInput);
         let content = text_editor(&self.output)
-            .font(cosmic::font::FONT_MONO_REGULAR)
+            .font(cosmic::font::Font::MONOSPACE)
             .on_action(Message::OutputAction);
         column![
             content,
             row![
                 text_input("type `help` for list of commands", self.command.as_str())
-                    .font(cosmic::font::FONT_MONO_REGULAR)
+                    .font(cosmic::font::Font::MONOSPACE)
                     .on_input(Message::CommandInput)
                     .on_submit(Message::SubmitCommand),
                 button("send").on_press(Message::SubmitCommand),
