@@ -2,7 +2,7 @@
     "image": "mcr.microsoft.com/devcontainers/base:ubuntu",
     "features": {
         "ghcr.io/rocker-org/devcontainer-features/apt-packages:1": {
-            "packages": "curl,git,pkg-config,libudev-dev,mesa-utils,libgtk-3-dev",
+            "packages": "curl,git,pkg-config,libudev-dev,mesa-utils,libgtk-3-dev,cmake,just,libexpat1-dev,libfontconfig-dev,libfreetype-dev,libxkbcommon-dev,pkgconf",
             "upgradePackages": true
         },
         "ghcr.io/devcontainers/features/rust:1": {}
