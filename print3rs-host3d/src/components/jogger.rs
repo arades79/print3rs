@@ -1,12 +1,9 @@
+use crate::messages::{JogMove, Message, MoveAxis};
 use cosmic::iced_widget::{button, column, row};
 use cosmic::widget::{container, slider, text, Space};
 use cosmic::Element;
 use {super::centered_row::centered_row, cosmic::iced::alignment};
 use {crate::app::App, cosmic::iced::Alignment};
-use {
-    crate::messages::{JogMove, Message, MoveAxis},
-    iced_aw::number_input,
-};
 
 pub(crate) fn jogger(app: &App) -> Element<'_, Message> {
     enum Jog {
@@ -61,13 +58,9 @@ pub(crate) fn jogger(app: &App) -> Element<'_, Message> {
             ]
             .spacing(10.0)
             .align_items(Alignment::Center),
-            centered_row![
-                slider(0.0..=100.0, app.jog_scale, Message::JogScale)
-                    .step(1.0)
-                    .width(240),
-                number_input(scale, 0.0..100.0, Message::JogScale).width(70),
-            ]
-            .spacing(10.0),
+            slider(0.0..=100.0, app.jog_scale, Message::JogScale)
+                .step(1.0)
+                .width(240),
             centered_row![
                 button(text("home").horizontal_alignment(alignment::Horizontal::Center))
                     .width(BUTTON_WIDTH)

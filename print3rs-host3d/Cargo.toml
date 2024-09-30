@@ -25,7 +25,6 @@ tokio-serial = { version = "5.4.4", features = ["libudev"] }
 tokio = { version = "1.36.0", features = ["rt", "sync", "fs"] }
 winnow = "0.6.3"
 tokio-stream = { version = "0.1.14", features = ["sync"] }
-iced_aw = "0.11"
 directories-next = "2.0.0"
 rfd = { version = "0.15.0", default-features = false, features = [
     "tokio",
