@@ -1,4 +1,5 @@
 use {
+    cosmic::widget::ToastId,
     print3rs_commands::{
         commands::{connect::Connection, Command},
         response::Response,
@@ -66,8 +67,8 @@ pub(crate) enum Message {
     SaveConsole(PathBuf),
     ConsoleAppend(String),
     AutoConnectComplete(Arc<Mutex<Printer>>),
-    PushError(String),
-    DismissError,
+    PushToast(String),
+    PopToast(ToastId),
     OutputAction(cosmic::widget::text_editor::Action),
     NoOp,
 }
@@ -76,7 +77,7 @@ impl From<Response> for Message {
     fn from(value: Response) -> Self {
         match value {
             Response::Output(s) => Message::ConsoleAppend(s.to_string()),
-            Response::Error(e) => Message::PushError(e.0),
+            Response::Error(e) => Message::PushToast(e.0),
             Response::AutoConnect(a) => Message::AutoConnectComplete(a),
             Response::Clear => Message::ClearConsole,
             Response::Quit => Message::Quit,

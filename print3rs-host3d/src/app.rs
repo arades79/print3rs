@@ -1,5 +1,8 @@
 use cosmic::{
-    app::Core, iced::Subscription, prelude::*, widget, widget::combo_box::State as ComboState,
+    app::Core,
+    iced::Subscription,
+    prelude::*,
+    widget::{self, combo_box::State as ComboState, Toast, Toasts},
     Application, Command,
 };
 use {
@@ -23,7 +26,7 @@ pub(crate) struct App {
     pub(crate) connection: Connection<String>,
     pub(crate) commander: Commander,
     pub(crate) console: Console,
-    pub(crate) error_messages: Vec<String>,
+    pub(crate) toasts: Toasts<Message>,
     pub(crate) jog_scale: f32,
 }
 
@@ -48,7 +51,7 @@ impl Application for App {
                 connection: Connection::Auto,
                 commander: Default::default(),
                 console: Default::default(),
-                error_messages: Default::default(),
+                toasts: Toasts::new(Message::PopToast),
                 jog_scale: 10.0,
             },
             Command::none(),
@@ -66,7 +69,7 @@ impl Application for App {
         )
     }
 
-    fn update(&mut self, message: Self::Message) -> Command<cosmic::app::Message<Message>> {
+    fn update(&mut self, message: Self::Message) -> Command<cosmic::app::Message<Self::Message>> {
         match message {
             Message::Jog(JogMove { x, y, z }) => {
                 if let Err(msg) = self
@@ -74,9 +77,12 @@ impl Application for App {
                     .printer()
                     .try_send_unsequenced(format!("G7X{x}Y{y}Z{z}"))
                 {
-                    self.error_messages.push(msg.to_string());
+                    self.toasts
+                        .push(Toast::new(msg.to_string()))
+                        .map(cosmic::app::Message::App)
+                } else {
+                    Command::none()
                 }
-                Command::none()
             }
             Message::ToggleConnect => {
                 if self.commander.printer().is_connected() {
@@ -87,7 +93,10 @@ impl Application for App {
                             self.connection.to_borrowed(),
                         ))
                 {
-                    self.error_messages.push(msg.0);
+                    return self
+                        .toasts
+                        .push(Toast::new(msg.0))
+                        .map(cosmic::app::Message::App);
                 }
 
                 Command::none()
@@ -105,7 +114,10 @@ impl Application for App {
                     print3rs_commands::commands::parse_command.parse(command_string)
                 {
                     if let Err(msg) = self.commander.dispatch(command) {
-                        self.error_messages.push(msg.0);
+                        return self
+                            .toasts
+                            .push(Toast::new(msg.0))
+                            .map(cosmic::app::Message::App);
                     }
                     if !self.console.command_history.contains(command_string) {
                         self.console
@@ -120,16 +132,21 @@ impl Application for App {
                     }
                     command_string.clear();
                 } else {
-                    self.error_messages
-                        .push("Could not parse command".to_string());
+                    return self
+                        .toasts
+                        .push(Toast::new("Could not parse command"))
+                        .map(cosmic::app::Message::App);
                 }
                 Command::none()
             }
             Message::ProcessCommand(command) => {
                 if let Err(msg) = self.commander.dispatch(&command) {
-                    self.error_messages.push(msg.0)
+                    self.toasts
+                        .push(Toast::new(msg.0))
+                        .map(cosmic::app::Message::App)
+                } else {
+                    Command::none()
                 }
-                Command::none()
             }
             Message::ConsoleAppend(s) => {
                 use widget::text_editor::{Action, Edit};
@@ -182,12 +199,12 @@ impl Application for App {
                     cosmic::app::Message::App(Message::NoOp)
                 })
             }
-            Message::PushError(msg) => {
-                self.error_messages.push(msg);
-                Command::none()
-            }
-            Message::DismissError => {
-                self.error_messages.pop();
+            Message::PushToast(msg) => self
+                .toasts
+                .push(Toast::new(msg))
+                .map(cosmic::app::Message::App),
+            Message::PopToast(id) => {
+                self.toasts.remove(id);
                 Command::none()
             }
             Message::OutputAction(action) => {
@@ -213,9 +230,12 @@ impl Application for App {
                     .printer()
                     .try_send_unsequenced(format!("G28{arg}"))
                 {
-                    self.error_messages.push(msg.to_string());
+                    self.toasts
+                        .push(Toast::new(msg.to_string()))
+                        .map(cosmic::app::Message::App)
+                } else {
+                    Command::none()
                 }
-                Command::none()
             }
             Message::SelectProtocol(proto) => {
                 self.connection = match proto {
