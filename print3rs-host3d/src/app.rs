@@ -259,7 +259,7 @@ impl Application for App {
             .push(self.console.view())
             .padding(10);
         let screen = widget::column()
-            .push(components::app_menu(self))
+            //.push(components::app_menu(self))
             .push(main_content);
 
         components::error_prompt(self, screen).into()

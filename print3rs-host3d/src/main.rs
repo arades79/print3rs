@@ -1,11 +1,10 @@
+use {app::App, cosmic::app::Settings, std::error::Error};
 
-use iced::Application;
-
+mod app;
 mod components;
 mod messages;
-mod app;
 
-
-fn main() -> iced::Result {
-    app::App::run(iced::Settings::default())
+fn main() -> Result<(), Box<dyn Error>> {
+    cosmic::app::run::<App>(Settings::default(), ())?;
+    Ok(())
 }
