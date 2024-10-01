@@ -262,15 +262,7 @@ impl Application for App {
                 Command::none()
             }
             Message::DoMacro(index) => {
-                //TODO: oh god the horror
-                if let Some(commands) = self
-                    .commander
-                    .macros
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(i, (_key, commands))| (index == i).then_some(commands))
-                    .next()
-                {
+                if let Some((_name, commands)) = self.commander.macros.iter().nth(index) {
                     cosmic::command::message(Message::ProcessCommand(
                         print3rs_commands::commands::Command::Gcodes(commands.clone()),
                     ))
@@ -279,16 +271,7 @@ impl Application for App {
                 }
             }
             Message::KillTask(index) => {
-                //TODO: oh god the horror
-                if let Some(key) = self
-                    .commander
-                    .tasks
-                    .keys()
-                    .enumerate()
-                    .filter_map(|(i, key)| (i == index).then_some(key))
-                    .cloned()
-                    .next()
-                {
+                if let Some(key) = self.commander.tasks.keys().nth(index).cloned() {
                     self.commander.tasks.remove(&key);
                 }
                 Command::none()
