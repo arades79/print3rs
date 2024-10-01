@@ -261,6 +261,38 @@ impl Application for App {
                 self.connection = connection;
                 Command::none()
             }
+            Message::DoMacro(index) => {
+                //TODO: oh god the horror
+                if let Some(commands) = self
+                    .commander
+                    .macros
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, (_key, commands))| (index == i).then_some(commands))
+                    .next()
+                {
+                    cosmic::command::message(Message::ProcessCommand(
+                        print3rs_commands::commands::Command::Gcodes(commands.clone()),
+                    ))
+                } else {
+                    Command::none()
+                }
+            }
+            Message::KillTask(index) => {
+                //TODO: oh god the horror
+                if let Some(key) = self
+                    .commander
+                    .tasks
+                    .keys()
+                    .enumerate()
+                    .filter_map(|(i, key)| (i == index).then_some(key))
+                    .cloned()
+                    .next()
+                {
+                    self.commander.tasks.remove(&key);
+                }
+                Command::none()
+            }
         }
     }
 
@@ -284,5 +316,9 @@ impl Application for App {
 
     fn core_mut(&mut self) -> &mut Core {
         &mut self.cosmic
+    }
+
+    fn header_start(&self) -> Vec<Element<Self::Message>> {
+        vec![components::app_menu(self).into()]
     }
 }

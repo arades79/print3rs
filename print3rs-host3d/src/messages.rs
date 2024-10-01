@@ -70,6 +70,8 @@ pub(crate) enum Message {
     PushToast(String),
     PopToast(ToastId),
     OutputAction(cosmic::widget::text_editor::Action),
+    DoMacro(usize),
+    KillTask(usize),
     NoOp,
 }
 
