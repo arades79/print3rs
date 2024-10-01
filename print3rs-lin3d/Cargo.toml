@@ -1,7 +1,7 @@
 [package]
 name = "lin3d"
 description = "Cross platform console 3D-printer host"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 license = "GPL-3.0-only"
 authors = ["Skyelar Craver <contact@arades.dev>"]
