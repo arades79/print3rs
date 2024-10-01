@@ -21,15 +21,20 @@ eula = false
 print3rs-core = { path = "../print3rs-core" }
 print3rs-serializer = { path = "../print3rs-serializer" }
 print3rs-commands = { path = "../print3rs-commands" }
-iced = { version = "0.12.1", features = ["tokio"] }
 tokio-serial = { version = "5.4.4", features = ["libudev"] }
 tokio = { version = "1.36.0", features = ["rt", "sync", "fs"] }
 winnow = "0.6.3"
 tokio-stream = { version = "0.1.14", features = ["sync"] }
-iced_aw = "0.9.3"
 directories-next = "2.0.0"
-rfd = { version = "0.14.0", default-features = false, features = [
+rfd = { version = "0.15.0", default-features = false, features = [
     "tokio",
     "gtk3",
 ] }
-iced_runtime = "0.12.1"
+open = "5.3.0"
+rust-embed = "8.5.0"
+
+
+[dependencies.libcosmic]
+git = "https://github.com/pop-os/libcosmic.git"
+default-features = false
+features = ["dbus-config", "tokio", "winit", "wgpu"]

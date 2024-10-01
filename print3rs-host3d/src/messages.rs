@@ -1,11 +1,17 @@
 use {
-    print3rs_commands::{commands::Command, response::Response},
+    cosmic::widget::ToastId,
+    print3rs_commands::{
+        commands::{connect::Connection, Command},
+        response::Response,
+    },
     print3rs_core::Printer,
     std::{
         path::PathBuf,
         sync::{Arc, Mutex},
     },
 };
+
+use crate::components::Protocol;
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct JogMove {
@@ -47,10 +53,10 @@ pub enum MoveAxis {
 pub(crate) enum Message {
     Jog(JogMove),
     Home(MoveAxis),
-    JogScale(f32),
-    ChangePort(String),
-    ChangeBaud(u32),
+    SelectProtocol(Protocol),
+    ChangeConnection(Connection<String>),
     ToggleConnect,
+    JogScale(f32),
     CommandInput(String),
     SubmitCommand,
     ProcessCommand(Command<String>),
@@ -61,10 +67,11 @@ pub(crate) enum Message {
     SaveConsole(PathBuf),
     ConsoleAppend(String),
     AutoConnectComplete(Arc<Mutex<Printer>>),
-    PushError(String),
-    DismissError,
-    OutputAction(iced::widget::text_editor::Action),
-    ChangeTheme(iced::Theme),
+    PushToast(String),
+    PopToast(ToastId),
+    OutputAction(cosmic::widget::text_editor::Action),
+    DoMacro(usize),
+    KillTask(usize),
     NoOp,
 }
 
@@ -72,7 +79,7 @@ impl From<Response> for Message {
     fn from(value: Response) -> Self {
         match value {
             Response::Output(s) => Message::ConsoleAppend(s.to_string()),
-            Response::Error(e) => Message::PushError(e.0),
+            Response::Error(e) => Message::PushToast(e.0),
             Response::AutoConnect(a) => Message::AutoConnectComplete(a),
             Response::Clear => Message::ClearConsole,
             Response::Quit => Message::Quit,

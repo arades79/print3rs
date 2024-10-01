@@ -1,43 +1,72 @@
-use {
-    iced::{
-        widget::{button, column, text},
-        Length,
-    },
-};
-
-use iced_aw::{menu, menu::Item, menu_bar};
+use {cosmic::widget::menu, std::collections::HashMap};
 
 use crate::app::App;
 use crate::messages::Message;
 
-macro_rules! menu_template {
-     ($($x:tt)+) => {
-         menu!($($x)+).max_width(180.0)
-     };
- }
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+enum MenuAction {
+    DoMacro(usize),
+    KillTask(usize),
+    Print,
+    Clear,
+    Save,
+    Quit,
+}
 
-pub(crate) fn app_menu(
-    _app: &App,
-) -> menu::MenuBar<'_, Message, <App as iced::Application>::Theme, iced::Renderer> {
-    let menu_button = |label: &str| button(text(label)).width(Length::Fill);
-    let themes = column(iced::Theme::ALL.iter().map(|theme| {
-        menu_button(&theme.to_string())
-            .on_press(Message::ChangeTheme(theme.clone()))
-            .into()
-    }));
-    #[rustfmt::skip]
-    let mb = 
-    menu_bar!(
-        (text("File"), menu_template!(
-            (menu_button("Print").on_press(Message::PrintDialog))
-            (menu_button("Clear").on_press(Message::ClearConsole))
-            (menu_button("Save").on_press(Message::SaveDialog))
-            (menu_button("Quit").on_press(Message::Quit))
-        ))
-        (text("Interface"), menu_template!(
-            ("Theme", menu_template!((themes)))
-        ))
-    )
-    .spacing(8.0);
-    mb
+impl menu::Action for MenuAction {
+    type Message = Message;
+
+    fn message(&self) -> Self::Message {
+        match self {
+            MenuAction::DoMacro(index) => Message::DoMacro(*index),
+            MenuAction::KillTask(index) => Message::KillTask(*index),
+            MenuAction::Print => Message::PrintDialog,
+            MenuAction::Clear => Message::ClearConsole,
+            MenuAction::Save => Message::SaveDialog,
+            MenuAction::Quit => Message::Quit,
+        }
+    }
+}
+
+pub(crate) fn app_menu(app: &App) -> menu::MenuBar<'_, Message> {
+    let keybinds = HashMap::new();
+    let file = menu::Tree::with_children(
+        menu::root("File"),
+        menu::items(
+            &keybinds,
+            vec![
+                menu::Item::Button("Print", MenuAction::Print),
+                menu::Item::Button("Save", MenuAction::Save),
+                menu::Item::Button("Clear", MenuAction::Clear),
+                menu::Item::Button("Quit", MenuAction::Quit),
+            ],
+        ),
+    );
+    let macros = menu::Tree::with_children(
+        menu::root("Macros"),
+        menu::items(
+            &keybinds,
+            app.commander
+                .macros
+                .iter()
+                .enumerate()
+                .map(|(index, (name, _content))| {
+                    menu::Item::Button(name.clone(), MenuAction::DoMacro(index))
+                })
+                .collect(),
+        ),
+    );
+    let tasks = menu::Tree::with_children(
+        menu::root("Tasks"),
+        menu::items(
+            &keybinds,
+            app.commander
+                .tasks
+                .keys()
+                .enumerate()
+                .map(|(index, name)| menu::Item::Button(name.clone(), MenuAction::KillTask(index)))
+                .collect(),
+        ),
+    );
+    menu::MenuBar::new(vec![file, macros, tasks])
 }

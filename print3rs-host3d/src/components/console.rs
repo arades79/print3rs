@@ -1,21 +1,20 @@
 use {
-    iced::{
-        widget::{button, column, combo_box, combo_box::State as ComboState, row, text_editor},
-        Font, Length,
+    cosmic::{
+        iced_widget::{button, column, row},
+        widget::{combo_box::State as ComboState, text_editor, text_editor::Content, text_input},
+        Element,
     },
     std::collections::VecDeque,
 };
 
-use crate::app::AppElement;
 use crate::messages::Message;
-use iced::widget::text_editor::Content;
 
 #[derive(Debug)]
 pub(crate) struct State {
     pub(crate) output: Content,
     pub(crate) command_state: ComboState<String>,
     pub(crate) command_history: VecDeque<String>,
-    pub(crate) command: Option<String>,
+    pub(crate) command: String,
 }
 
 impl Default for State {
@@ -30,22 +29,19 @@ impl Default for State {
 }
 
 impl State {
-    pub(crate) fn view(&self) -> AppElement<'_> {
-        let prompt = combo_box(
-            &self.command_state,
-            "type `help` for list of commands",
-            self.command.as_ref(),
-            Message::CommandInput,
-        )
-        .font(Font::MONOSPACE)
-        .on_input(Message::CommandInput);
+    pub(crate) fn view(&self) -> Element<'_, Message> {
         let content = text_editor(&self.output)
-            .on_action(Message::OutputAction)
-            .height(Length::Fill)
-            .font(Font::MONOSPACE);
+            .font(cosmic::font::Font::MONOSPACE)
+            .on_action(Message::OutputAction);
         column![
             content,
-            row![prompt, button("send").on_press(Message::SubmitCommand),]
+            row![
+                text_input("type `help` for list of commands", self.command.as_str())
+                    .font(cosmic::font::Font::MONOSPACE)
+                    .on_input(Message::CommandInput)
+                    .on_submit(Message::SubmitCommand)
+                    .trailing_icon(button("send").on_press(Message::SubmitCommand).into()),
+            ]
         ]
         .into()
     }
