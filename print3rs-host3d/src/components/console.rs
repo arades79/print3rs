@@ -30,13 +30,6 @@ impl Default for State {
 
 impl State {
     pub(crate) fn view(&self) -> Element<'_, Message> {
-        // let prompt = combo_box(
-        //     &self.command_state,
-        //     "type `help` for list of commands",
-        //     self.command.as_ref(),
-        //     Message::CommandInput,
-        // )
-        // .on_input(Message::CommandInput);
         let content = text_editor(&self.output)
             .font(cosmic::font::Font::MONOSPACE)
             .on_action(Message::OutputAction);
@@ -46,8 +39,8 @@ impl State {
                 text_input("type `help` for list of commands", self.command.as_str())
                     .font(cosmic::font::Font::MONOSPACE)
                     .on_input(Message::CommandInput)
-                    .on_submit(Message::SubmitCommand),
-                button("send").on_press(Message::SubmitCommand),
+                    .on_submit(Message::SubmitCommand)
+                    .trailing_icon(button("send").on_press(Message::SubmitCommand).into()),
             ]
         ]
         .into()
