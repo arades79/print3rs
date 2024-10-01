@@ -58,6 +58,18 @@ impl Application for App {
         )
     }
 
+    fn core(&self) -> &Core {
+        &self.cosmic
+    }
+
+    fn core_mut(&mut self) -> &mut Core {
+        &mut self.cosmic
+    }
+
+    fn header_start(&self) -> Vec<Element<Self::Message>> {
+        vec![components::app_menu(self).into()]
+    }
+
     fn subscription(&self) -> Subscription<Self::Message> {
         struct PrinterResponseSubscription;
         let responses = self.commander.subscribe_responses();
@@ -291,17 +303,5 @@ impl Application for App {
             .push(self.console.view())
             .padding(10);
         toaster(&self.toasts, main_content)
-    }
-
-    fn core(&self) -> &Core {
-        &self.cosmic
-    }
-
-    fn core_mut(&mut self) -> &mut Core {
-        &mut self.cosmic
-    }
-
-    fn header_start(&self) -> Vec<Element<Self::Message>> {
-        vec![components::app_menu(self).into()]
     }
 }
