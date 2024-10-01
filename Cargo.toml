@@ -28,7 +28,13 @@ install-path = "CARGO_HOME"
 install-updater = false
 
 [workspace.metadata.dist.dependencies.apt]
+pkg-config = "*"
 libudev-dev = "*"
+libgtk-3-dev = "*"
+libexpat1-dev = "*"
+libfontconfig-dev = "*"
+libfreetype-dev = "*"
+libxkbcommon-dev = "*"
 
 # The profile that 'cargo dist' will build with
 [profile.dist]
