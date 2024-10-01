@@ -2,7 +2,7 @@ use cosmic::{
     app::Core,
     iced::Subscription,
     prelude::*,
-    widget::{self, combo_box::State as ComboState, Toast, Toasts},
+    widget::{self, combo_box::State as ComboState, toaster, Toast, Toasts},
     Application, Command,
 };
 use {
@@ -275,10 +275,7 @@ impl Application for App {
             )
             .push(self.console.view())
             .padding(10);
-        let screen = widget::column()
-            //.push(components::app_menu(self))
-            .push(main_content);
-        screen.into()
+        toaster(&self.toasts, main_content)
     }
 
     fn core(&self) -> &Core {
